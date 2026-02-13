@@ -142,7 +142,9 @@ def create_sample_pdf(filepath, data):
 def main():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     pdf_dir = os.path.join(base_dir, "input_pdf")
+    excel_dir = os.path.join(base_dir, "excel_sheets")
     os.makedirs(pdf_dir, exist_ok=True)
+    os.makedirs(excel_dir, exist_ok=True)
 
     # サンプルデータ
     sample_users = [
@@ -192,7 +194,7 @@ def main():
     for user in sample_users:
         # Excel ファイル生成
         excel_name = f"{user['施設名略称']}{user['苗字']}さん　無料体験ヒアリングシート.xlsx"
-        excel_path = os.path.join(base_dir, excel_name)
+        excel_path = os.path.join(excel_dir, excel_name)
         create_sample_excel(excel_path, user["施設名正式"], user["苗字"])
 
         # PDF ファイル生成
@@ -201,12 +203,12 @@ def main():
         create_sample_pdf(pdf_path, user)
 
     # 照合失敗テスト用: Excelに対応するPDFがないケース
-    excel_no_match = os.path.join(base_dir, "パシ田中さん　無料体験ヒアリングシート.xlsx")
+    excel_no_match = os.path.join(excel_dir, "パシ田中さん　無料体験ヒアリングシート.xlsx")
     create_sample_excel(excel_no_match, "パシフィック", "田中")
 
     print("\n=== 生成完了 ===")
     print(f"PDF格納先: {pdf_dir}")
-    print(f"Excel格納先: {base_dir}")
+    print(f"Excel格納先: {excel_dir}")
 
 
 if __name__ == "__main__":

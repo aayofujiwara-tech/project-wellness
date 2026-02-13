@@ -1,5 +1,6 @@
 # サンプル・生成データ
 *.xlsx
+excel_sheets/
 input_pdf/*.pdf
 
 # 自動生成フォルダ

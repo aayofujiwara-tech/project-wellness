@@ -13,17 +13,20 @@ pip install -r requirements.txt
 ### 1. ファイルを配置する
 
 - `input_pdf/` フォルダにPDFファイルを入れる
-- 同じディレクトリにExcelヒアリングシート（`.xlsx`）を配置する
+- `excel_sheets/` フォルダにExcelヒアリングシート（`.xlsx`）を配置する
 
 ```
 project-wellness/
 ├── auto_pdf_to_excel.py        # メインスクリプト
 ├── config.json                 # 設定ファイル
-├── input_pdf/
+├── input_pdf/                  # PDF入力
 │   ├── 利用者情報_三代花子.pdf
 │   └── 利用者情報_笠岡太郎.pdf
-├── パシ三代さん　無料体験ヒアリングシート.xlsx
-└── ルネ笠岡さん　無料体験ヒアリングシート.xlsx
+└── excel_sheets/               # Excelファイル格納
+    ├── パシ三代さん　無料体験ヒアリングシート.xlsx
+    ├── ルネ笠岡さん　無料体験ヒアリングシート.xlsx
+    ├── backups/                # 自動バックアップ
+    └── processed/              # 処理済みPDF移動先
 ```
 
 ### 2. 実行する
@@ -39,7 +42,7 @@ python auto_pdf_to_excel.py --dry-run
 python auto_pdf_to_excel.py --log-file result.log
 
 # ディレクトリを指定
-python auto_pdf_to_excel.py --pdf-dir input_pdf --excel-dir .
+python auto_pdf_to_excel.py --pdf-dir input_pdf --excel-dir excel_sheets
 ```
 
 ## 照合ロジック

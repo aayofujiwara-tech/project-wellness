@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """PDF利用者情報 → Excel ヒアリングシート 自動転記スクリプト。
 
-input_pdf/ 内のPDFファイルを解析し、利用者氏名を基にカレントディレクトリの
+input_pdf/ 内のPDFファイルを解析し、利用者氏名を基に excel_sheets/ 内の
 Excelヒアリングシートへデータを自動転記する。
 
 使い方:
     python auto_pdf_to_excel.py
-    python auto_pdf_to_excel.py --config config.json --pdf-dir input_pdf --excel-dir .
+    python auto_pdf_to_excel.py --config config.json --pdf-dir input_pdf --excel-dir excel_sheets
     python auto_pdf_to_excel.py --dry-run   # 書き込みせずに確認のみ
 """
 
@@ -443,6 +443,10 @@ def process_all(config_path, pdf_dir, excel_dir, dry_run=False, log_file=None):
     logger.info(f"PDF入力元:   {os.path.abspath(pdf_dir)}")
     logger.info(f"Excel出力先: {os.path.abspath(excel_dir)}")
 
+    # ディレクトリが存在しない場合は自動作成
+    os.makedirs(pdf_dir, exist_ok=True)
+    os.makedirs(excel_dir, exist_ok=True)
+
     # PDF一覧
     pdf_files = [
         os.path.join(pdf_dir, f)
@@ -630,8 +634,8 @@ def main():
         help="PDF入力ディレクトリ (デフォルト: input_pdf)"
     )
     parser.add_argument(
-        "--excel-dir", default=".",
-        help="Excelファイルディレクトリ (デフォルト: カレント)"
+        "--excel-dir", default="excel_sheets",
+        help="Excelファイルディレクトリ (デフォルト: excel_sheets)"
     )
     parser.add_argument(
         "--dry-run", action="store_true",
