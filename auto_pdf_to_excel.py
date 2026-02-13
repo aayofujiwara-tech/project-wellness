@@ -2,14 +2,14 @@
 """利用者情報 → Excel ヒアリングシート 自動転記スクリプト。
 
 入力ソース:
-    --mode pdf   : input_pdf/ 内のPDFから利用者情報を抽出して転記（従来方式）
-    --mode excel : input_excel/ 内の「基本情報シート」Excelから利用者情報を抽出して転記
+    --source pdf   : input_pdf/ 内のPDFから利用者情報を抽出して転記（従来方式）
+    --source excel : input_excel/ 内の「基本情報シート」Excelから利用者情報を抽出して転記
 
 使い方:
-    python auto_pdf_to_excel.py                          # PDF→ヒアリングシート (form1)
-    python auto_pdf_to_excel.py --mode excel             # 基本情報Excel→ヒアリングシート
-    python auto_pdf_to_excel.py --mode excel --dry-run   # ドライラン
-    python auto_pdf_to_excel.py --form form2             # 下段(form2)に転記
+    python auto_pdf_to_excel.py                            # PDF→ヒアリングシート (form1)
+    python auto_pdf_to_excel.py --source excel             # 基本情報Excel→ヒアリングシート
+    python auto_pdf_to_excel.py --source excel --dry-run   # ドライラン
+    python auto_pdf_to_excel.py --form form2               # 下段(form2)に転記
 """
 
 import argparse
@@ -124,10 +124,74 @@ def extract_data_from_pdf(pdf_path, config):
 
 
 # ---------------------------------------------------------------------------
-# 基本情報シート（Excel）解析
+# 基本情報シート（Excel）解析 – パーサー群
+# ---------------------------------------------------------------------------
+def parse_age_from_template(cell_value):
+    """'年齢　　　　　　68　　歳' → '68'"""
+    if not cell_value:
+        return None
+    normalized = normalize_text(str(cell_value))
+    match = re.search(r"(\d+)\s*歳", normalized)
+    return match.group(1) if match else None
+
+
+def parse_era_date(cell_value):
+    """元号テンプレートから生年月日を抽出する。
+
+    例: '明治・大正・昭和・平成　　　　32年　　４月　　２日'
+    → 年月日の数値を抽出し、年数から元号を推定して 'X和YY年M月D日' を返す。
+    """
+    if not cell_value:
+        return None
+    normalized = normalize_text(str(cell_value))
+    match = re.search(r"(\d+)\s*年\s*(\d+)\s*月\s*(\d+)\s*日", normalized)
+    if not match:
+        return None
+    year = int(match.group(1))
+    month = int(match.group(2))
+    day = int(match.group(3))
+
+    # 元号推定: テキスト中に強調マークがないため年数と範囲で推定
+    # 大正: 1-15, 昭和: 1-64, 平成: 1-31, 令和: 1-
+    # 高齢者利用が大半のため、大正・昭和を優先
+    if "令和" in normalized and year <= 20:
+        era = "令和"
+    elif "平成" in normalized and year <= 31:
+        # 平成か昭和かは年数だけでは曖昧 → 年齢から逆算を試みる
+        era = "平成" if year <= 31 else "昭和"
+    else:
+        # デフォルト: 年数から推定
+        if year >= 1 and year <= 15:
+            era = "大正"  # 大正と昭和の区別は困難だが、高齢者なら大正もあり得る
+        elif year >= 1 and year <= 64:
+            era = "昭和"
+        else:
+            era = "昭和"
+
+    return f"{era}{year}年{month}月{day}日"
+
+
+def parse_gender_template(cell_value):
+    """性別テンプレート '男　・　女' → 空文字を返す。
+
+    基本情報シートでは性別は未入力（テンプレ文字列のまま）のため空扱い。
+    """
+    return ""
+
+
+# セルパーサーのディスパッチテーブル
+_CELL_PARSERS = {
+    "age_from_template": parse_age_from_template,
+    "era_date": parse_era_date,
+    "gender_template": parse_gender_template,
+}
+
+
+# ---------------------------------------------------------------------------
+# 基本情報シート（Excel）解析 – 抽出
 # ---------------------------------------------------------------------------
 def _is_dummy_name(value):
-    """C4セルの値がダミーデータかどうか判定する。
+    """氏名セルの値がダミーデータかどうか判定する。
 
     空文字、None、「年  月  日」系パターン、記号のみの場合 True を返す。
     """
@@ -152,33 +216,34 @@ def _clean_name(name):
     return re.sub(r"[　\s]*様$", "", name).strip()
 
 
-def extract_data_from_basic_info(excel_path, config, logger=None):
-    """基本情報シートExcelの全シートからデータを抽出する。
+def extract_data_from_excel(excel_path, config, logger=None):
+    """基本情報シートExcelの全シートから利用者データを抽出する。
 
-    各シートを走査し、以下を除外する:
-      - シート名が「原本」のシート
-      - C4（氏名）セルがダミーデータのシート
+    config["excel_source_cell_mapping"] で定義されたセル座標から値を読み取り、
+    config["skip_sheets"] に含まれるシートはスキップする。
+    氏名セルがダミーデータのシートも除外する。
 
     Returns:
         list[tuple[str, dict]]: (シート名, データ辞書) のリスト。
         有効なシートがなければ空リスト。
     """
-    cell_map = config["basic_info_cell_mapping"]
+    cell_map = config["excel_source_cell_mapping"]
+    skip_sheets = config.get("skip_sheets", ["原本"])
     wb = load_workbook(excel_path, data_only=True)
     results = []
-    bi_name = os.path.basename(excel_path)
 
     for ws in wb.worksheets:
         sheet_name = ws.title
 
-        # 「原本」シートはスキップ
-        if sheet_name == "原本":
+        # スキップ対象シート
+        if sheet_name in skip_sheets:
             if logger:
-                logger.info(f"  [SKIP] シート「{sheet_name}」: 原本テンプレートのためスキップ")
+                logger.info(f"  [SKIP] シート「{sheet_name}」: スキップ対象のためスキップ")
             continue
 
-        # C4（氏名）バリデーション
-        name_cell = cell_map.get("利用者氏名", "C4")
+        # 氏名セルのバリデーション
+        name_info = cell_map.get("利用者氏名", {"cell": "E9"})
+        name_cell = name_info["cell"] if isinstance(name_info, dict) else name_info
         raw_name = ws[name_cell].value
         if _is_dummy_name(raw_name):
             reason = "空欄" if not raw_name or not str(raw_name).strip() else f"ダミーデータ「{str(raw_name).strip()}」"
@@ -188,10 +253,27 @@ def extract_data_from_basic_info(excel_path, config, logger=None):
 
         # データ抽出
         data = {}
-        for field_name, cell_addr in cell_map.items():
+        for field_name, field_info in cell_map.items():
+            if field_name.startswith("_"):
+                continue  # _comment 等をスキップ
+            if isinstance(field_info, dict):
+                cell_addr = field_info["cell"]
+                parse_name = field_info.get("parse")
+            else:
+                cell_addr = field_info
+                parse_name = None
+
             value = ws[cell_addr].value
-            if value is not None:
-                data[field_name] = normalize_text(str(value).strip())
+
+            if parse_name and parse_name in _CELL_PARSERS:
+                value = _CELL_PARSERS[parse_name](value)
+            elif value is not None:
+                value = normalize_text(str(value).strip())
+            else:
+                value = None
+
+            if value is not None and value != "":
+                data[field_name] = value
 
         # 氏名の「様」を除去
         if "利用者氏名" in data:
@@ -206,11 +288,15 @@ def extract_data_from_basic_info(excel_path, config, logger=None):
     return results
 
 
-def find_basic_info_files(input_dir):
-    """ディレクトリ内の基本情報シートExcelファイルを一覧する。"""
+def find_source_excel_files(input_dir, config):
+    """ディレクトリ内の基本情報シートExcelファイルを一覧する。
+
+    config["source_file_pattern"] の正規表現でマッチングする。
+    """
+    pattern = config.get("source_file_pattern", r"基本情報シート.*\.xlsx$")
     files = []
     for f in os.listdir(input_dir):
-        if f.endswith(".xlsx") and "基本情報" in f:
+        if re.search(pattern, f):
             files.append(os.path.join(input_dir, f))
     return sorted(files)
 
@@ -640,25 +726,25 @@ def process_all(config_path, input_dir, excel_dir, form_name="form1",
             input_items.append((pdf_path, data))
 
     elif mode == "excel":
-        basic_info_files = find_basic_info_files(input_dir)
-        if not basic_info_files:
+        source_files = find_source_excel_files(input_dir, config)
+        if not source_files:
             logger.warning("処理対象の基本情報シートが見つかりません。")
             return
 
-        logger.info(f"基本情報シート数: {len(basic_info_files)}, ヒアリングシート数: {len(excel_files)}")
+        logger.info(f"基本情報シート数: {len(source_files)}, ヒアリングシート数: {len(excel_files)}")
 
-        for bi_path in sorted(basic_info_files):
-            bi_name = os.path.basename(bi_path)
-            logger.info(f"\n--- 処理中: {bi_name} ---")
+        for src_path in source_files:
+            src_name = os.path.basename(src_path)
+            logger.info(f"\n--- 処理中: {src_name} ---")
             try:
-                sheet_results = extract_data_from_basic_info(bi_path, config, logger)
+                sheet_results = extract_data_from_excel(src_path, config, logger)
             except Exception as e:
-                logger.error(f"  基本情報シート解析エラー: {bi_name} - {e}")
+                logger.error(f"  基本情報シート解析エラー: {src_name} - {e}")
                 sheet_results = []
             if not sheet_results:
-                logger.warning(f"  有効なデータシートなし: {bi_name}")
+                logger.warning(f"  有効なデータシートなし: {src_name}")
             for sheet_name, data in sheet_results:
-                input_items.append((bi_path, data))
+                input_items.append((src_path, data))
 
     else:
         logger.error(f"不明なモード: {mode}")
@@ -731,10 +817,10 @@ def main():
         description="利用者情報 → Excel ヒアリングシート 自動転記"
     )
     parser.add_argument("--config", default="config.json", help="設定ファイルパス")
-    parser.add_argument("--mode", default="pdf", choices=["pdf", "excel"],
-                        help="入力モード: pdf=PDF解析, excel=基本情報シート読取 (デフォルト: pdf)")
-    parser.add_argument("--input-dir", default=None,
-                        help="入力ディレクトリ (デフォルト: pdf→input_pdf, excel→input_excel)")
+    parser.add_argument("--source", default="pdf", choices=["pdf", "excel"],
+                        help="入力ソース: pdf=PDF解析, excel=基本情報シート読取 (デフォルト: pdf)")
+    parser.add_argument("--source-dir", default=None,
+                        help="入力ソースディレクトリ (デフォルト: pdf→input_pdf, excel→config.source_dir)")
     parser.add_argument("--excel-dir", default="excel_sheets",
                         help="ヒアリングシート格納ディレクトリ")
     parser.add_argument("--form", default="form1",
@@ -744,18 +830,22 @@ def main():
     parser.add_argument("--log-file", default=None, help="ログファイルパス")
     args = parser.parse_args()
 
-    # 入力ディレクトリのデフォルト値をモードに応じて設定
-    if args.input_dir is None:
-        input_dir = "input_pdf" if args.mode == "pdf" else "input_excel"
+    # 入力ディレクトリのデフォルト値をソースに応じて設定
+    if args.source_dir is not None:
+        input_dir = args.source_dir
+    elif args.source == "pdf":
+        input_dir = "input_pdf"
     else:
-        input_dir = args.input_dir
+        # config の source_dir を参照（デフォルト: input_excel）
+        config = load_config(args.config)
+        input_dir = config.get("source_dir", "input_excel")
 
     process_all(
         config_path=args.config,
         input_dir=input_dir,
         excel_dir=args.excel_dir,
         form_name=args.form,
-        mode=args.mode,
+        mode=args.source,
         dry_run=args.dry_run,
         log_file=args.log_file,
     )

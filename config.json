@@ -59,14 +59,27 @@
       "要介護度":   { "cell": "C26", "format": "format_care_level_inline" }
     }
   },
-  "basic_info_cell_mapping": {
-    "利用者氏名": "C4",
-    "ふりがな":   "C3",
-    "生年月日":   "C5",
-    "住所":       "C7",
-    "電話番号":   "C8",
-    "要介護度":   "C11"
+  "excel_source_cell_mapping": {
+    "_comment": "基本情報シートExcelからのデータ読み取り座標（個別シート用、B列始まり）",
+    "利用者氏名":       { "cell": "E9" },
+    "ふりがな":         { "cell": "E8" },
+    "住所":             { "cell": "E6" },
+    "性別":             { "cell": "R8", "parse": "gender_template" },
+    "生年月日":         { "cell": "E10", "parse": "era_date" },
+    "年齢":             { "cell": "O10", "parse": "age_from_template" },
+    "現在の病気":       { "cell": "F13" },
+    "既往歴":           { "cell": "F15" },
+    "服薬情報":         { "cell": "F18" },
+    "医療機関名":       { "cell": "F21" },
+    "主治医":           { "cell": "P21" },
+    "緊急連絡先1_氏名": { "cell": "C27" },
+    "緊急連絡先1_続柄": { "cell": "G27" },
+    "緊急連絡先1_住所": { "cell": "I27" },
+    "緊急連絡先1_電話": { "cell": "P27" }
   },
+  "source_dir": "input_excel",
+  "source_file_pattern": "基本情報シート.*\\.xlsx$",
+  "skip_sheets": ["原本"],
   "care_level_mapping": {
     "要支援1": ["要支援1", "要支援１", "支援1", "支援１"],
     "要支援2": ["要支援2", "要支援２", "支援2", "支援２"],

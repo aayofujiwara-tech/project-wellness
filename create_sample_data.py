@@ -139,8 +139,17 @@ def create_sample_pdf(filepath, data):
     print(f"  [PDF]   作成: {filepath}")
 
 
-def _fill_basic_info_sheet(ws, data):
-    """1シート分の基本情報データを書き込む（共通ヘルパー）。"""
+def _fill_source_excel_sheet(ws, data):
+    """1シート分の基本情報シートデータを書き込む（新仕様: B列始まり）。
+
+    セル配置（個別シート用、B列始まり）:
+        B1:T1 タイトル,
+        E6:T7 住所, E8:O8 ふりがな, E9:O9 氏名,
+        R8:T9 性別テンプレ, E10:N11 生年月日テンプレ, O10:T10 年齢テンプレ,
+        F13:T14 現在の病気, F15:T16 既往歴, F18:T19 服薬情報,
+        F21:O21 医療機関名, P21:T21 主治医,
+        C27:F28 緊急連絡先1氏名, G27:H28 続柄, I27:O28 住所, P27:T28 電話
+    """
     header_font = Font(name="游ゴシック", size=14, bold=True)
     label_font = Font(name="游ゴシック", size=11, bold=True)
     input_font = Font(name="游ゴシック", size=11)
@@ -151,113 +160,116 @@ def _fill_basic_info_sheet(ws, data):
         bottom=Side(style="thin"),
     )
     label_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
-    section_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
 
-    ws.column_dimensions["A"].width = 14
-    ws.column_dimensions["B"].width = 4
-    ws.column_dimensions["C"].width = 35
+    # 列幅
+    for col in ["B", "C", "D", "E", "F", "G", "H", "I", "J", "K",
+                "L", "M", "N", "O", "P", "Q", "R", "S", "T"]:
+        ws.column_dimensions[col].width = 6
 
     # タイトル
-    ws.merge_cells("A1:C1")
-    ws["A1"] = "利用者基本情報"
-    ws["A1"].font = header_font
-    ws["A1"].alignment = Alignment(horizontal="center")
+    ws.merge_cells("B1:T1")
+    ws["B1"] = "利用者基本情報シート"
+    ws["B1"].font = header_font
+    ws["B1"].alignment = Alignment(horizontal="center")
 
-    # 基本情報セクション
-    ws["A2"] = "【基本情報】"
-    ws["A2"].font = label_font
-    ws["A2"].fill = section_fill
+    # ラベル＋データ配置
+    def _label(cell, text):
+        ws[cell] = text
+        ws[cell].font = label_font
+        ws[cell].border = thin_border
+        ws[cell].fill = label_fill
 
-    rows = [
-        (3, "ふりがな", data.get("ふりがな", "")),
-        (4, "氏名", data.get("氏名", "")),
-        (5, "生年月日", data.get("生年月日", "")),
-        (6, "性別", data.get("性別", "")),
-        (7, "住所", data.get("住所", "")),
-        (8, "電話番号", data.get("電話番号", "")),
-    ]
-    for row, label, value in rows:
-        ws[f"A{row}"] = label
-        ws[f"A{row}"].font = label_font
-        ws[f"A{row}"].border = thin_border
-        ws[f"A{row}"].fill = label_fill
-        ws[f"C{row}"] = value
-        ws[f"C{row}"].font = input_font
-        ws[f"C{row}"].border = thin_border
+    def _value(cell, text):
+        ws[cell] = text
+        ws[cell].font = input_font
+        ws[cell].border = thin_border
 
-    # 介護保険セクション
-    ws["A10"] = "【介護保険】"
-    ws["A10"].font = label_font
-    ws["A10"].fill = section_fill
-    ws["A11"] = "要介護度"
-    ws["A11"].font = label_font
-    ws["A11"].border = thin_border
-    ws["A11"].fill = label_fill
-    ws["C11"] = data.get("要介護度", "")
-    ws["C11"].font = input_font
-    ws["C11"].border = thin_border
+    # 住所 (E6)
+    _label("B6", "住所")
+    _value("E6", data.get("住所", ""))
+
+    # ふりがな (E8)
+    _label("B8", "ふりがな")
+    _value("E8", data.get("ふりがな", ""))
+
+    # 氏名 (E9)
+    _label("B9", "氏名")
+    _value("E9", data.get("氏名", ""))
+
+    # 性別テンプレート (R8) - 常に「男　・　女」テンプレ
+    _label("R8", data.get("性別テンプレ", "男　・　女"))
+
+    # 生年月日テンプレ (E10) - 元号テンプレ + 実年月日
+    era_year = data.get("和暦年", "")
+    era_month = data.get("月", "")
+    era_day = data.get("日", "")
+    dob_template = f"明治・大正・昭和・平成　　　　{era_year}年　　{era_month}月　　{era_day}日"
+    _label("B10", "生年月日")
+    _value("E10", dob_template if era_year else "明治・大正・昭和・平成　　　　年　　月　　日")
+
+    # 年齢テンプレ (O10)
+    age_num = data.get("年齢数値", "")
+    _value("O10", f"年齢　　　　　　{age_num}　　歳" if age_num else "年齢　　　　　　　　歳")
+
+    # 現在の病気 (F13)
+    _label("B13", "現在の病気")
+    _value("F13", data.get("現在の病気", ""))
+
+    # 既往歴 (F15)
+    _label("B15", "既往歴")
+    _value("F15", data.get("既往歴", ""))
+
+    # 服薬情報 (F18)
+    _label("B18", "服薬情報")
+    _value("F18", data.get("服薬情報", ""))
+
+    # 医療機関名 (F21) / 主治医 (P21)
+    _label("B21", "医療機関名")
+    _value("F21", data.get("医療機関名", ""))
+    _value("P21", data.get("主治医", ""))
+
+    # 緊急連絡先 (C27, G27, I27, P27)
+    _label("B27", "緊急連絡先")
+    _value("C27", data.get("緊急連絡先1_氏名", ""))
+    _value("G27", data.get("緊急連絡先1_続柄", ""))
+    _value("I27", data.get("緊急連絡先1_住所", ""))
+    _value("P27", data.get("緊急連絡先1_電話", ""))
 
 
-def create_basic_info_sheet(filepath, data):
-    """基本情報シート風のExcelファイルを作成する（単一シート版）。
-
-    セル配置:
-        A1: タイトル, A3: ふりがなラベル, C3: ふりがな値
-        A4: 氏名ラベル, C4: 氏名値, A5: 生年月日ラベル, C5: 生年月日値
-        A7: 住所ラベル, C7: 住所値, A8: 電話番号ラベル, C8: 電話番号値
-        A10: 介護保険セクション, A11: 要介護度ラベル, C11: 要介護度値
-    """
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "基本情報"
-    _fill_basic_info_sheet(ws, data)
-    wb.save(filepath)
-    print(f"  [基本情報] 作成: {filepath}")
-
-
-def create_multi_sheet_basic_info(filepath, users_data):
-    """マルチシート基本情報Excelを作成する（テスト用）。
+def create_source_excel(filepath, users_data):
+    """基本情報シートExcelを作成する（原本 + 個別シート + ダミー）。
 
     シート構成:
-      - 「原本」: テンプレートシート（ダミーデータ「年  月  日」）
-      - 各利用者名のシート: 実データ
-      - 「空シート」: C4が空欄のダミーシート
+      - 「原本」: A列始まりテンプレート（氏名空欄）
+      - 各利用者名のシート: B列始まり実データ
+      - 「空シート」: 氏名が空のダミーシート
     """
     wb = Workbook()
 
-    # 1. 「原本」シート（テンプレート）
+    # 1.「原本」シート（テンプレート）
     ws_template = wb.active
     ws_template.title = "原本"
-    _fill_basic_info_sheet(ws_template, {
-        "ふりがな": "",
-        "氏名": "年  月  日",
-        "生年月日": "年  月  日",
-        "性別": "",
-        "住所": "",
-        "電話番号": "",
-        "要介護度": "",
-    })
+    _fill_source_excel_sheet(ws_template, {})  # 全空
 
     # 2. 各利用者のデータシート
     for user_data in users_data:
-        sheet_name = user_data.get("氏名", "不明").replace("　", " ")
+        # シート名は「氏名様」形式
+        name = user_data.get("氏名", "不明")
+        sheet_name = _clean_sheet_name(name) + "様"
         ws = wb.create_sheet(title=sheet_name)
-        _fill_basic_info_sheet(ws, user_data)
+        _fill_source_excel_sheet(ws, user_data)
 
-    # 3. ダミーシート（C4が空欄）
+    # 3. ダミーシート（氏名空欄）
     ws_empty = wb.create_sheet(title="空シート")
-    _fill_basic_info_sheet(ws_empty, {
-        "ふりがな": "",
-        "氏名": "",
-        "生年月日": "",
-        "性別": "",
-        "住所": "",
-        "電話番号": "",
-        "要介護度": "",
-    })
+    _fill_source_excel_sheet(ws_empty, {})
 
     wb.save(filepath)
-    print(f"  [マルチシート基本情報] 作成: {filepath} ({len(wb.sheetnames)} シート: {', '.join(wb.sheetnames)})")
+    print(f"  [基本情報シート] 作成: {filepath} ({len(wb.sheetnames)}シート: {', '.join(wb.sheetnames)})")
+
+
+def _clean_sheet_name(name):
+    """シート名に使える形に整形する。"""
+    return name.replace("　", "").replace(" ", "")
 
 
 def main():
@@ -269,7 +281,7 @@ def main():
     os.makedirs(excel_dir, exist_ok=True)
     os.makedirs(basic_info_dir, exist_ok=True)
 
-    # サンプルデータ
+    # サンプルデータ（PDF・ヒアリングシート用）
     sample_users = [
         {
             "施設名略称": "パシ",
@@ -312,10 +324,66 @@ def main():
         },
     ]
 
+    # 基本情報シートExcel用データ（新仕様: B列始まり）
+    source_excel_users = {
+        "パシ": [
+            {
+                "氏名": "杉田　誠一",
+                "ふりがな": "すぎた　せいいち",
+                "住所": "大阪府大阪市西淀川区野里1-32-14-108",
+                "和暦年": "32", "月": "4", "日": "2",
+                "年齢数値": "68",
+                "現在の病気": "家族性パーキンソン病Yahr5",
+                "既往歴": "肺炎治療後、神経症、腰痛症",
+                "服薬情報": "ドパコール配合錠L150mg",
+                "医療機関名": "田島クリニック",
+                "主治医": "谷川　祐二",
+                "緊急連絡先1_氏名": "杉田　孝次郎",
+                "緊急連絡先1_続柄": "弟",
+                "緊急連絡先1_住所": "大阪府大阪市鶴見区放出東3-21-61",
+                "緊急連絡先1_電話": "090-6056-2930",
+            },
+            {
+                "氏名": "林　郁子",
+                "ふりがな": "はやし　いくこ",
+                "住所": "大阪府大阪市西淀川区姫島5-12-3",
+                "和暦年": "28", "月": "11", "日": "15",
+                "年齢数値": "72",
+                "現在の病気": "変形性膝関節症",
+                "既往歴": "高血圧、糖尿病",
+                "服薬情報": "アムロジピン5mg",
+                "医療機関名": "西淀川医院",
+                "主治医": "佐々木　健一",
+                "緊急連絡先1_氏名": "林　正夫",
+                "緊急連絡先1_続柄": "夫",
+                "緊急連絡先1_住所": "大阪府大阪市西淀川区姫島5-12-3",
+                "緊急連絡先1_電話": "06-1234-5678",
+            },
+        ],
+        "ルネ": [
+            {
+                "氏名": "笠岡　太郎",
+                "ふりがな": "かさおか　たろう",
+                "住所": "岡山県笠岡市港町4-5-6",
+                "和暦年": "10", "月": "7", "日": "20",
+                "年齢数値": "90",
+                "現在の病気": "慢性心不全",
+                "既往歴": "脳梗塞、前立腺肥大",
+                "服薬情報": "ワーファリン2mg、タムスロシン0.2mg",
+                "医療機関名": "笠岡中央病院",
+                "主治医": "田中　一郎",
+                "緊急連絡先1_氏名": "笠岡　良子",
+                "緊急連絡先1_続柄": "妻",
+                "緊急連絡先1_住所": "岡山県笠岡市港町4-5-6",
+                "緊急連絡先1_電話": "0865-78-9012",
+            },
+        ],
+    }
+
     print("=== サンプルデータ生成 ===\n")
 
     for user in sample_users:
-        # Excel ファイル生成
+        # ヒアリングシート Excel 生成
         excel_name = f"{user['施設名略称']}{user['苗字']}さん　無料体験ヒアリングシート.xlsx"
         excel_path = os.path.join(excel_dir, excel_name)
         create_sample_excel(excel_path, user["施設名正式"], user["苗字"])
@@ -325,36 +393,25 @@ def main():
         pdf_path = os.path.join(pdf_dir, pdf_name)
         create_sample_pdf(pdf_path, user)
 
-        # 基本情報シート生成
-        bi_name = f"基本情報シート（{user['施設名略称']}）_{user['苗字']}.xlsx"
-        bi_path = os.path.join(basic_info_dir, bi_name)
-        create_basic_info_sheet(bi_path, user)
-
-    # 照合失敗テスト用: Excelに対応するPDFがないケース
+    # 照合失敗テスト用: ヒアリングシートに対応するPDFがないケース
     excel_no_match = os.path.join(excel_dir, "パシ田中さん　無料体験ヒアリングシート.xlsx")
     create_sample_excel(excel_no_match, "パシフィック", "田中")
 
-    # マルチシート基本情報テスト用（原本+実データ+ダミー）
-    # パシフィック施設の2名分を1ファイルにまとめる
-    pasi_users = [u for u in sample_users if u["施設名略称"] == "パシ"]
-    multi_bi_path = os.path.join(basic_info_dir, "基本情報シート（パシ）_まとめ.xlsx")
-    create_multi_sheet_basic_info(multi_bi_path, pasi_users)
+    # 基本情報シートExcel生成（新仕様: 施設ごとに1ファイル、原本+個別シート+ダミー）
+    for facility_abbr, users in source_excel_users.items():
+        bi_name = f"基本情報シート_{facility_abbr}_.xlsx"
+        bi_path = os.path.join(basic_info_dir, bi_name)
+        create_source_excel(bi_path, users)
 
-    # 「様」付き氏名テスト用
-    sama_user = {
-        "氏名": "佐藤　花子　様",
-        "ふりがな": "さとう はなこ",
-        "性別": "女性",
-        "生年月日": "昭和18年5月1日",
-        "住所": "岡山県笠岡市中央町10-11",
-        "電話番号": "0865-99-8765",
-        "要介護度": "要介護1",
-    }
-    sama_bi_path = os.path.join(basic_info_dir, "基本情報シート（パシ）_佐藤.xlsx")
-    create_basic_info_sheet(sama_bi_path, sama_user)
-    # 対応するヒアリングシートも作成
-    sama_excel = os.path.join(excel_dir, "パシ佐藤さん　無料体験ヒアリングシート.xlsx")
-    create_sample_excel(sama_excel, "パシフィック", "佐藤")
+    # 基本情報シートに対応するヒアリングシートも追加生成
+    extra_hearing_sheets = [
+        ("パシ", "杉田"), ("パシ", "林"),
+    ]
+    for abbr, surname in extra_hearing_sheets:
+        hs_name = f"{abbr}{surname}さん　無料体験ヒアリングシート.xlsx"
+        hs_path = os.path.join(excel_dir, hs_name)
+        if not os.path.exists(hs_path):
+            create_sample_excel(hs_path, {"パシ": "パシフィック", "ルネ": "ルネサンス"}[abbr], surname)
 
     print("\n=== 生成完了 ===")
     print(f"PDF格納先: {pdf_dir}")
