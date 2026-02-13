@@ -2,6 +2,11 @@
 *.xlsx
 input_pdf/*.pdf
 
+# 自動生成フォルダ
+backups/
+processed/
+report_*.txt
+
 # Python
 __pycache__/
 *.pyc
