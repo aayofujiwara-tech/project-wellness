@@ -139,19 +139,8 @@ def create_sample_pdf(filepath, data):
     print(f"  [PDF]   作成: {filepath}")
 
 
-def create_basic_info_sheet(filepath, data):
-    """基本情報シート風のExcelファイルを作成する。
-
-    セル配置:
-        A1: タイトル, A3: ふりがなラベル, C3: ふりがな値
-        A4: 氏名ラベル, C4: 氏名値, A5: 生年月日ラベル, C5: 生年月日値
-        A7: 住所ラベル, C7: 住所値, A8: 電話番号ラベル, C8: 電話番号値
-        A10: 介護保険セクション, A11: 要介護度ラベル, C11: 要介護度値
-    """
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "基本情報"
-
+def _fill_basic_info_sheet(ws, data):
+    """1シート分の基本情報データを書き込む（共通ヘルパー）。"""
     header_font = Font(name="游ゴシック", size=14, bold=True)
     label_font = Font(name="游ゴシック", size=11, bold=True)
     input_font = Font(name="游ゴシック", size=11)
@@ -180,12 +169,12 @@ def create_basic_info_sheet(filepath, data):
     ws["A2"].fill = section_fill
 
     rows = [
-        (3, "ふりがな", data["ふりがな"]),
-        (4, "氏名", data["氏名"]),
-        (5, "生年月日", data["生年月日"]),
+        (3, "ふりがな", data.get("ふりがな", "")),
+        (4, "氏名", data.get("氏名", "")),
+        (5, "生年月日", data.get("生年月日", "")),
         (6, "性別", data.get("性別", "")),
-        (7, "住所", data["住所"]),
-        (8, "電話番号", data["電話番号"]),
+        (7, "住所", data.get("住所", "")),
+        (8, "電話番号", data.get("電話番号", "")),
     ]
     for row, label, value in rows:
         ws[f"A{row}"] = label
@@ -204,12 +193,71 @@ def create_basic_info_sheet(filepath, data):
     ws["A11"].font = label_font
     ws["A11"].border = thin_border
     ws["A11"].fill = label_fill
-    ws["C11"] = data["要介護度"]
+    ws["C11"] = data.get("要介護度", "")
     ws["C11"].font = input_font
     ws["C11"].border = thin_border
 
+
+def create_basic_info_sheet(filepath, data):
+    """基本情報シート風のExcelファイルを作成する（単一シート版）。
+
+    セル配置:
+        A1: タイトル, A3: ふりがなラベル, C3: ふりがな値
+        A4: 氏名ラベル, C4: 氏名値, A5: 生年月日ラベル, C5: 生年月日値
+        A7: 住所ラベル, C7: 住所値, A8: 電話番号ラベル, C8: 電話番号値
+        A10: 介護保険セクション, A11: 要介護度ラベル, C11: 要介護度値
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "基本情報"
+    _fill_basic_info_sheet(ws, data)
     wb.save(filepath)
     print(f"  [基本情報] 作成: {filepath}")
+
+
+def create_multi_sheet_basic_info(filepath, users_data):
+    """マルチシート基本情報Excelを作成する（テスト用）。
+
+    シート構成:
+      - 「原本」: テンプレートシート（ダミーデータ「年  月  日」）
+      - 各利用者名のシート: 実データ
+      - 「空シート」: C4が空欄のダミーシート
+    """
+    wb = Workbook()
+
+    # 1. 「原本」シート（テンプレート）
+    ws_template = wb.active
+    ws_template.title = "原本"
+    _fill_basic_info_sheet(ws_template, {
+        "ふりがな": "",
+        "氏名": "年  月  日",
+        "生年月日": "年  月  日",
+        "性別": "",
+        "住所": "",
+        "電話番号": "",
+        "要介護度": "",
+    })
+
+    # 2. 各利用者のデータシート
+    for user_data in users_data:
+        sheet_name = user_data.get("氏名", "不明").replace("　", " ")
+        ws = wb.create_sheet(title=sheet_name)
+        _fill_basic_info_sheet(ws, user_data)
+
+    # 3. ダミーシート（C4が空欄）
+    ws_empty = wb.create_sheet(title="空シート")
+    _fill_basic_info_sheet(ws_empty, {
+        "ふりがな": "",
+        "氏名": "",
+        "生年月日": "",
+        "性別": "",
+        "住所": "",
+        "電話番号": "",
+        "要介護度": "",
+    })
+
+    wb.save(filepath)
+    print(f"  [マルチシート基本情報] 作成: {filepath} ({len(wb.sheetnames)} シート: {', '.join(wb.sheetnames)})")
 
 
 def main():
@@ -285,6 +333,28 @@ def main():
     # 照合失敗テスト用: Excelに対応するPDFがないケース
     excel_no_match = os.path.join(excel_dir, "パシ田中さん　無料体験ヒアリングシート.xlsx")
     create_sample_excel(excel_no_match, "パシフィック", "田中")
+
+    # マルチシート基本情報テスト用（原本+実データ+ダミー）
+    # パシフィック施設の2名分を1ファイルにまとめる
+    pasi_users = [u for u in sample_users if u["施設名略称"] == "パシ"]
+    multi_bi_path = os.path.join(basic_info_dir, "基本情報シート（パシ）_まとめ.xlsx")
+    create_multi_sheet_basic_info(multi_bi_path, pasi_users)
+
+    # 「様」付き氏名テスト用
+    sama_user = {
+        "氏名": "佐藤　花子　様",
+        "ふりがな": "さとう はなこ",
+        "性別": "女性",
+        "生年月日": "昭和18年5月1日",
+        "住所": "岡山県笠岡市中央町10-11",
+        "電話番号": "0865-99-8765",
+        "要介護度": "要介護1",
+    }
+    sama_bi_path = os.path.join(basic_info_dir, "基本情報シート（パシ）_佐藤.xlsx")
+    create_basic_info_sheet(sama_bi_path, sama_user)
+    # 対応するヒアリングシートも作成
+    sama_excel = os.path.join(excel_dir, "パシ佐藤さん　無料体験ヒアリングシート.xlsx")
+    create_sample_excel(sama_excel, "パシフィック", "佐藤")
 
     print("\n=== 生成完了 ===")
     print(f"PDF格納先: {pdf_dir}")

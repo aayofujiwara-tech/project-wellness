@@ -126,24 +126,84 @@ def extract_data_from_pdf(pdf_path, config):
 # ---------------------------------------------------------------------------
 # 基本情報シート（Excel）解析
 # ---------------------------------------------------------------------------
-def extract_data_from_basic_info(excel_path, config):
-    """基本情報シートExcelから構造化データを抽出する。
+def _is_dummy_name(value):
+    """C4セルの値がダミーデータかどうか判定する。
 
-    config["basic_info_cell_mapping"] で定義されたセル座標から値を読み取り、
-    PDF解析と同じフィールド名の辞書を返す。
+    空文字、None、「年  月  日」系パターン、記号のみの場合 True を返す。
+    """
+    if not value:
+        return True
+    s = str(value).strip()
+    if not s:
+        return True
+    # 「年  月  日」「年 月 日」「年月日」系
+    if re.match(r"^年\s*月\s*日$", s):
+        return True
+    # 記号・空白のみ（全角スペース含む）
+    if re.match(r"^[\s　\-\−\—\–\/_・．.、。○◯●■□△▲▽▼※＊]+$", s):
+        return True
+    return False
+
+
+def _clean_name(name):
+    """氏名から末尾の「様」を除去する。"""
+    if not name:
+        return name
+    return re.sub(r"[　\s]*様$", "", name).strip()
+
+
+def extract_data_from_basic_info(excel_path, config, logger=None):
+    """基本情報シートExcelの全シートからデータを抽出する。
+
+    各シートを走査し、以下を除外する:
+      - シート名が「原本」のシート
+      - C4（氏名）セルがダミーデータのシート
+
+    Returns:
+        list[tuple[str, dict]]: (シート名, データ辞書) のリスト。
+        有効なシートがなければ空リスト。
     """
     cell_map = config["basic_info_cell_mapping"]
     wb = load_workbook(excel_path, data_only=True)
-    ws = wb.active
+    results = []
+    bi_name = os.path.basename(excel_path)
 
-    data = {}
-    for field_name, cell_addr in cell_map.items():
-        value = ws[cell_addr].value
-        if value is not None:
-            data[field_name] = normalize_text(str(value).strip())
+    for ws in wb.worksheets:
+        sheet_name = ws.title
+
+        # 「原本」シートはスキップ
+        if sheet_name == "原本":
+            if logger:
+                logger.info(f"  [SKIP] シート「{sheet_name}」: 原本テンプレートのためスキップ")
+            continue
+
+        # C4（氏名）バリデーション
+        name_cell = cell_map.get("利用者氏名", "C4")
+        raw_name = ws[name_cell].value
+        if _is_dummy_name(raw_name):
+            reason = "空欄" if not raw_name or not str(raw_name).strip() else f"ダミーデータ「{str(raw_name).strip()}」"
+            if logger:
+                logger.info(f"  [SKIP] シート「{sheet_name}」: {reason}")
+            continue
+
+        # データ抽出
+        data = {}
+        for field_name, cell_addr in cell_map.items():
+            value = ws[cell_addr].value
+            if value is not None:
+                data[field_name] = normalize_text(str(value).strip())
+
+        # 氏名の「様」を除去
+        if "利用者氏名" in data:
+            data["利用者氏名"] = _clean_name(data["利用者氏名"])
+
+        if logger:
+            logger.info(f"  [OK] シート「{sheet_name}」: 氏名={data.get('利用者氏名', '?')}")
+
+        results.append((sheet_name, data))
 
     wb.close()
-    return data
+    return results
 
 
 def find_basic_info_files(input_dir):
@@ -159,8 +219,14 @@ def find_basic_info_files(input_dir):
 # 共通: 苗字抽出
 # ---------------------------------------------------------------------------
 def get_surname(data):
-    """抽出データから苗字を取得する。"""
+    """抽出データから苗字を取得する。
+
+    氏名末尾の「様」を除去したうえで苗字部分を返す。
+    """
     full_name = data.get("利用者氏名", "")
+    if not full_name:
+        return None
+    full_name = _clean_name(full_name)
     if not full_name:
         return None
     parts = re.split(r"[\s　]+", full_name)
@@ -585,11 +651,14 @@ def process_all(config_path, input_dir, excel_dir, form_name="form1",
             bi_name = os.path.basename(bi_path)
             logger.info(f"\n--- 処理中: {bi_name} ---")
             try:
-                data = extract_data_from_basic_info(bi_path, config)
+                sheet_results = extract_data_from_basic_info(bi_path, config, logger)
             except Exception as e:
                 logger.error(f"  基本情報シート解析エラー: {bi_name} - {e}")
-                data = None
-            input_items.append((bi_path, data))
+                sheet_results = []
+            if not sheet_results:
+                logger.warning(f"  有効なデータシートなし: {bi_name}")
+            for sheet_name, data in sheet_results:
+                input_items.append((bi_path, data))
 
     else:
         logger.error(f"不明なモード: {mode}")
