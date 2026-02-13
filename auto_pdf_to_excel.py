@@ -649,14 +649,16 @@ def _process_inputs(input_items, excel_files, config, excel_dir, form_name,
         if file_success:
             processed_paths.append(file_path)
 
-    # 処理済みファイルを移動
+    # 処理済みファイルを移動（重複排除）
     if not dry_run:
-        for path in processed_paths:
+        for path in sorted(set(processed_paths)):
             try:
                 move_dest = move_processed_file(path, processed_base)
                 logger.info(f"  移動: {os.path.basename(path)} → {move_dest}")
                 move_log.append((path, move_dest))
             except Exception as e:
+                if not os.path.exists(path):
+                    continue
                 logger.error(f"  移動失敗: {os.path.basename(path)} - {e}")
 
     return (success_list, no_name_list, no_match_list, multi_match_list,
