@@ -24,6 +24,7 @@ from datetime import datetime
 
 import fitz  # pymupdf
 from openpyxl import load_workbook
+from openpyxl.styles import Alignment
 
 # ---------------------------------------------------------------------------
 # ロギング設定
@@ -489,6 +490,32 @@ def format_furigana(value):
     return cleaned.strip()
 
 
+def format_name_combined(data):
+    """ふりがなと漢字氏名を改行で結合する。
+
+    ヒアリングシートの結合セル B6:D7（2行×3列）に書き込むため、
+    1行目=ふりがな、2行目=漢字氏名 の形式にする。
+    E6（性別ラベル）を上書きしないための統合書き込み方式。
+
+    Args:
+        data: 抽出データ辞書（'利用者氏名' と 'ふりがな' キーを参照）
+
+    Returns:
+        str: "すぎた せいいち\\n杉田 誠一" 形式の文字列。
+             ふりがながない場合は漢字氏名のみ。
+    """
+    name = (data.get("利用者氏名") or "").strip()
+    furigana = (data.get("ふりがな") or "").strip()
+
+    if furigana and name:
+        return f"{furigana}\n{name}"
+    elif name:
+        return name
+    elif furigana:
+        return furigana
+    return ""
+
+
 def format_care_level_inline(value, config):
     """要介護度を丸数字に変換してインライン文字列を返す。
 
@@ -556,6 +583,19 @@ def write_data_to_excel(filepath, data, config, form_name="form1", dry_run=False
     for field_name, field_info in cell_mapping.items():
         value = data.get(field_name)
         cell_addr = field_info["cell"]
+        fmt = field_info.get("format")
+
+        # --- name_combined: ふりがな+改行+漢字氏名を結合セルに統合書き込み ---
+        if fmt == "format_name_combined":
+            combined = format_name_combined(data)
+            if not combined or combined.strip() == "":
+                skipped_fields.append(field_name)
+                continue
+            if not dry_run:
+                ws[cell_addr].value = combined
+                ws[cell_addr].alignment = Alignment(wrap_text=True, vertical="top")
+            written_fields.append((field_name, combined, cell_addr))
+            continue
 
         # 空欄保護: 抽出結果がNoneまたは空文字の場合は既存値を保持
         if value is None or (isinstance(value, str) and value.strip() == ""):
@@ -567,7 +607,6 @@ def write_data_to_excel(filepath, data, config, form_name="form1", dry_run=False
             continue
 
         # フォーマット関数を適用
-        fmt = field_info.get("format")
         if fmt and fmt in format_functions:
             value = format_functions[fmt](value)
 
@@ -729,7 +768,8 @@ def _process_inputs(input_items, excel_files, config, excel_dir, form_name,
                 continue
 
             for field, value, pos in written:
-                logger.info(f"    ✓ {field}: {value} → {pos}")
+                display_val = str(value).replace("\n", "\\n") if value else value
+                logger.info(f"    ✓ {field}: {display_val} → {pos}")
 
             for field, existing in protected:
                 logger.info(f"    🛡 {field}: 既存値「{existing}」を保護")

@@ -41,8 +41,7 @@
   },
   "fixed_cell_mapping": {
     "form1": {
-      "利用者氏名": { "cell": "E6" },
-      "ふりがな":   { "cell": "B6", "format": "format_furigana" },
+      "利用者氏名": { "cell": "B6", "format": "format_name_combined" },
       "性別":       { "cell": "E7", "format": "format_gender" },
       "年齢":       { "cell": "G7", "format": "format_age" },
       "電話番号":   { "cell": "H7" },
@@ -51,8 +50,7 @@
       "主治医":     { "cell": "H15" }
     },
     "form2": {
-      "利用者氏名": { "cell": "E23" },
-      "ふりがな":   { "cell": "B23", "format": "format_furigana" },
+      "利用者氏名": { "cell": "B23", "format": "format_name_combined" },
       "性別":       { "cell": "E24", "format": "format_gender" },
       "年齢":       { "cell": "G24", "format": "format_age" },
       "電話番号":   { "cell": "H24" },
