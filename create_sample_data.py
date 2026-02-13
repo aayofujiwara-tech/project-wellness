@@ -139,12 +139,87 @@ def create_sample_pdf(filepath, data):
     print(f"  [PDF]   作成: {filepath}")
 
 
+def create_basic_info_sheet(filepath, data):
+    """基本情報シート風のExcelファイルを作成する。
+
+    セル配置:
+        A1: タイトル, A3: ふりがなラベル, C3: ふりがな値
+        A4: 氏名ラベル, C4: 氏名値, A5: 生年月日ラベル, C5: 生年月日値
+        A7: 住所ラベル, C7: 住所値, A8: 電話番号ラベル, C8: 電話番号値
+        A10: 介護保険セクション, A11: 要介護度ラベル, C11: 要介護度値
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "基本情報"
+
+    header_font = Font(name="游ゴシック", size=14, bold=True)
+    label_font = Font(name="游ゴシック", size=11, bold=True)
+    input_font = Font(name="游ゴシック", size=11)
+    thin_border = Border(
+        left=Side(style="thin"),
+        right=Side(style="thin"),
+        top=Side(style="thin"),
+        bottom=Side(style="thin"),
+    )
+    label_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+    section_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+
+    ws.column_dimensions["A"].width = 14
+    ws.column_dimensions["B"].width = 4
+    ws.column_dimensions["C"].width = 35
+
+    # タイトル
+    ws.merge_cells("A1:C1")
+    ws["A1"] = "利用者基本情報"
+    ws["A1"].font = header_font
+    ws["A1"].alignment = Alignment(horizontal="center")
+
+    # 基本情報セクション
+    ws["A2"] = "【基本情報】"
+    ws["A2"].font = label_font
+    ws["A2"].fill = section_fill
+
+    rows = [
+        (3, "ふりがな", data["ふりがな"]),
+        (4, "氏名", data["氏名"]),
+        (5, "生年月日", data["生年月日"]),
+        (6, "性別", data.get("性別", "")),
+        (7, "住所", data["住所"]),
+        (8, "電話番号", data["電話番号"]),
+    ]
+    for row, label, value in rows:
+        ws[f"A{row}"] = label
+        ws[f"A{row}"].font = label_font
+        ws[f"A{row}"].border = thin_border
+        ws[f"A{row}"].fill = label_fill
+        ws[f"C{row}"] = value
+        ws[f"C{row}"].font = input_font
+        ws[f"C{row}"].border = thin_border
+
+    # 介護保険セクション
+    ws["A10"] = "【介護保険】"
+    ws["A10"].font = label_font
+    ws["A10"].fill = section_fill
+    ws["A11"] = "要介護度"
+    ws["A11"].font = label_font
+    ws["A11"].border = thin_border
+    ws["A11"].fill = label_fill
+    ws["C11"] = data["要介護度"]
+    ws["C11"].font = input_font
+    ws["C11"].border = thin_border
+
+    wb.save(filepath)
+    print(f"  [基本情報] 作成: {filepath}")
+
+
 def main():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     pdf_dir = os.path.join(base_dir, "input_pdf")
     excel_dir = os.path.join(base_dir, "excel_sheets")
+    basic_info_dir = os.path.join(base_dir, "input_excel")
     os.makedirs(pdf_dir, exist_ok=True)
     os.makedirs(excel_dir, exist_ok=True)
+    os.makedirs(basic_info_dir, exist_ok=True)
 
     # サンプルデータ
     sample_users = [
@@ -202,13 +277,19 @@ def main():
         pdf_path = os.path.join(pdf_dir, pdf_name)
         create_sample_pdf(pdf_path, user)
 
+        # 基本情報シート生成
+        bi_name = f"基本情報シート（{user['施設名略称']}）_{user['苗字']}.xlsx"
+        bi_path = os.path.join(basic_info_dir, bi_name)
+        create_basic_info_sheet(bi_path, user)
+
     # 照合失敗テスト用: Excelに対応するPDFがないケース
     excel_no_match = os.path.join(excel_dir, "パシ田中さん　無料体験ヒアリングシート.xlsx")
     create_sample_excel(excel_no_match, "パシフィック", "田中")
 
     print("\n=== 生成完了 ===")
     print(f"PDF格納先: {pdf_dir}")
-    print(f"Excel格納先: {excel_dir}")
+    print(f"基本情報シート格納先: {basic_info_dir}")
+    print(f"ヒアリングシート格納先: {excel_dir}")
 
 
 if __name__ == "__main__":

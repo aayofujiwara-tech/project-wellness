@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
-"""PDF利用者情報 → Excel ヒアリングシート 自動転記スクリプト。
+"""利用者情報 → Excel ヒアリングシート 自動転記スクリプト。
 
-input_pdf/ 内のPDFファイルを解析し、利用者氏名を基に excel_sheets/ 内の
-Excelヒアリングシートへデータを自動転記する。
-
-運用方針:
-    デフォルトで上段フォーム（form1）に書き込む。
-    下段（form2）は --form form2 で切り替え可能。
+入力ソース:
+    --mode pdf   : input_pdf/ 内のPDFから利用者情報を抽出して転記（従来方式）
+    --mode excel : input_excel/ 内の「基本情報シート」Excelから利用者情報を抽出して転記
 
 使い方:
-    python auto_pdf_to_excel.py                          # 上段(form1)に転記
-    python auto_pdf_to_excel.py --dry-run                # 書き込みせずに確認のみ
+    python auto_pdf_to_excel.py                          # PDF→ヒアリングシート (form1)
+    python auto_pdf_to_excel.py --mode excel             # 基本情報Excel→ヒアリングシート
+    python auto_pdf_to_excel.py --mode excel --dry-run   # ドライラン
     python auto_pdf_to_excel.py --form form2             # 下段(form2)に転記
-    python auto_pdf_to_excel.py --config config.json --pdf-dir input_pdf --excel-dir excel_sheets
 """
 
 import argparse
@@ -73,19 +70,19 @@ def backup_excel(filepath, backup_base_dir):
     return dest
 
 
-def move_processed_pdf(pdf_path, processed_base_dir):
-    """処理済みPDFを processed/YYYYMMDD/ フォルダへ移動する。"""
+def move_processed_file(file_path, processed_base_dir):
+    """処理済みファイルを processed/YYYYMMDD/ フォルダへ移動する。"""
     date_str = datetime.now().strftime("%Y%m%d")
     dest_dir = os.path.join(processed_base_dir, date_str)
     os.makedirs(dest_dir, exist_ok=True)
-    dest = os.path.join(dest_dir, os.path.basename(pdf_path))
+    dest = os.path.join(dest_dir, os.path.basename(file_path))
     if os.path.exists(dest):
-        base, ext = os.path.splitext(os.path.basename(pdf_path))
+        base, ext = os.path.splitext(os.path.basename(file_path))
         counter = 1
         while os.path.exists(dest):
             dest = os.path.join(dest_dir, f"{base}_{counter}{ext}")
             counter += 1
-    shutil.move(pdf_path, dest)
+    shutil.move(file_path, dest)
     return dest
 
 
@@ -126,7 +123,42 @@ def extract_data_from_pdf(pdf_path, config):
     return parse_pdf_text(text, patterns)
 
 
-def get_surname_from_pdf_data(data):
+# ---------------------------------------------------------------------------
+# 基本情報シート（Excel）解析
+# ---------------------------------------------------------------------------
+def extract_data_from_basic_info(excel_path, config):
+    """基本情報シートExcelから構造化データを抽出する。
+
+    config["basic_info_cell_mapping"] で定義されたセル座標から値を読み取り、
+    PDF解析と同じフィールド名の辞書を返す。
+    """
+    cell_map = config["basic_info_cell_mapping"]
+    wb = load_workbook(excel_path, data_only=True)
+    ws = wb.active
+
+    data = {}
+    for field_name, cell_addr in cell_map.items():
+        value = ws[cell_addr].value
+        if value is not None:
+            data[field_name] = normalize_text(str(value).strip())
+
+    wb.close()
+    return data
+
+
+def find_basic_info_files(input_dir):
+    """ディレクトリ内の基本情報シートExcelファイルを一覧する。"""
+    files = []
+    for f in os.listdir(input_dir):
+        if f.endswith(".xlsx") and "基本情報" in f:
+            files.append(os.path.join(input_dir, f))
+    return sorted(files)
+
+
+# ---------------------------------------------------------------------------
+# 共通: 苗字抽出
+# ---------------------------------------------------------------------------
+def get_surname(data):
     """抽出データから苗字を取得する。"""
     full_name = data.get("利用者氏名", "")
     if not full_name:
@@ -175,7 +207,7 @@ def match_excel_file(surname, excel_files, config):
 # 要介護度の正規化
 # ---------------------------------------------------------------------------
 def normalize_care_level(value, config):
-    """PDF抽出値をconfig内の正規名称に正規化する。"""
+    """抽出値をconfig内の正規名称に正規化する。"""
     normalized_value = normalize_text(value)
     care_map = config.get("care_level_mapping", {})
     for canonical, aliases in care_map.items():
@@ -310,42 +342,43 @@ def write_data_to_excel(filepath, data, config, form_name="form1", dry_run=False
 # ---------------------------------------------------------------------------
 # レポート出力
 # ---------------------------------------------------------------------------
-def generate_report(report_path, success_list, no_name_pdfs, no_match_pdfs,
-                    multi_match_pdfs, unmatched_excels, backup_log, move_log,
-                    protected_log, dry_run=False):
+def generate_report(report_path, success_list, no_name_list, no_match_list,
+                    multi_match_list, unmatched_excels, backup_log, move_log,
+                    protected_log, mode="pdf", dry_run=False):
     """簡易レポートファイルを生成する。"""
     mode_label = "【ドライラン】" if dry_run else ""
+    source_label = "PDF" if mode == "pdf" else "基本情報Excel"
     lines = []
-    lines.append(f"{mode_label}PDF → Excel 自動転記 実行レポート")
+    lines.append(f"{mode_label}{source_label} → ヒアリングシート 自動転記 実行レポート")
     lines.append(f"生成日時: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append("=" * 60)
 
     lines.append(f"\n■ 成功: {len(success_list)} 件")
-    for pdf_name, excel_name, count in success_list:
-        lines.append(f"  {pdf_name} → {excel_name} ({count}項目転記)")
+    for src_name, excel_name, count in success_list:
+        lines.append(f"  {src_name} → {excel_name} ({count}項目転記)")
 
     if protected_log:
         lines.append(f"\n■ 空欄保護（既存値を維持）: {len(protected_log)} 件")
-        for pdf_name, field, existing in protected_log:
-            lines.append(f"  {pdf_name}: {field} (既存値「{existing}」を保護)")
+        for src_name, field, existing in protected_log:
+            lines.append(f"  {src_name}: {field} (既存値「{existing}」を保護)")
 
-    if no_name_pdfs:
-        lines.append(f"\n■ 失敗（氏名抽出不可）: {len(no_name_pdfs)} 件")
-        for name in no_name_pdfs:
+    if no_name_list:
+        lines.append(f"\n■ 失敗（氏名抽出不可）: {len(no_name_list)} 件")
+        for name in no_name_list:
             lines.append(f"  - {name}")
 
-    if no_match_pdfs:
-        lines.append(f"\n■ 失敗（対応Excel未発見）: {len(no_match_pdfs)} 件")
-        for pdf_name, surname in no_match_pdfs:
-            lines.append(f"  - {pdf_name} (苗字: {surname})")
+    if no_match_list:
+        lines.append(f"\n■ 失敗（対応Excel未発見）: {len(no_match_list)} 件")
+        for src_name, surname in no_match_list:
+            lines.append(f"  - {src_name} (苗字: {surname})")
 
-    if multi_match_pdfs:
-        lines.append(f"\n■ 注意（複数Excel一致）: {len(multi_match_pdfs)} 件")
-        for pdf_name, excel_names in multi_match_pdfs:
-            lines.append(f"  - {pdf_name} → {', '.join(excel_names)}")
+    if multi_match_list:
+        lines.append(f"\n■ 注意（複数Excel一致）: {len(multi_match_list)} 件")
+        for src_name, excel_names in multi_match_list:
+            lines.append(f"  - {src_name} → {', '.join(excel_names)}")
 
     if unmatched_excels:
-        lines.append(f"\n■ スキップ（対応PDFなしのExcel）: {len(unmatched_excels)} 件")
+        lines.append(f"\n■ スキップ（対応入力なしのExcel）: {len(unmatched_excels)} 件")
         for path in sorted(unmatched_excels):
             lines.append(f"  - {os.path.basename(path)}")
 
@@ -355,7 +388,7 @@ def generate_report(report_path, success_list, no_name_pdfs, no_match_pdfs,
             lines.append(f"  {os.path.basename(src)} → {dest}")
 
     if move_log:
-        lines.append(f"\n■ 処理済みPDF移動: {len(move_log)} 件")
+        lines.append(f"\n■ 処理済みファイル移動: {len(move_log)} 件")
         for src, dest in move_log:
             lines.append(f"  {os.path.basename(src)} → {dest}")
 
@@ -368,79 +401,46 @@ def generate_report(report_path, success_list, no_name_pdfs, no_match_pdfs,
 
 
 # ---------------------------------------------------------------------------
-# メイン処理
+# 共通転記ループ
 # ---------------------------------------------------------------------------
-def process_all(config_path, pdf_dir, excel_dir, form_name="form1",
-                dry_run=False, log_file=None):
-    """全PDFを処理してExcelに転記する。"""
-    setup_logging(log_file)
-    logger = logging.getLogger(__name__)
+def _process_inputs(input_items, excel_files, config, excel_dir, form_name,
+                    mode, dry_run, logger):
+    """入力ソース(PDF or 基本情報Excel)のリストを処理する共通ループ。
 
-    config = load_config(config_path)
-
-    # フォーム名の存在チェック
-    if form_name not in config.get("fixed_cell_mapping", {}):
-        logger.error(f"フォーム「{form_name}」が config.json の fixed_cell_mapping に存在しません。")
-        sys.exit(1)
-
-    mode_label = "【ドライラン】" if dry_run else ""
-    now = datetime.now()
-
-    logger.info(f"{'='*60}")
-    logger.info(f"{mode_label}PDF → Excel 自動転記処理 開始")
-    logger.info(f"{'='*60}")
-    logger.info(f"PDF入力元:   {os.path.abspath(pdf_dir)}")
-    logger.info(f"Excel出力先: {os.path.abspath(excel_dir)}")
-    logger.info(f"フォーム:    {form_name}")
-
-    os.makedirs(pdf_dir, exist_ok=True)
-    os.makedirs(excel_dir, exist_ok=True)
-
-    pdf_files = [
-        os.path.join(pdf_dir, f)
-        for f in os.listdir(pdf_dir)
-        if f.lower().endswith(".pdf")
-    ]
-    if not pdf_files:
-        logger.warning("処理対象のPDFファイルが見つかりません。")
-        return
-
-    excel_files = find_excel_files(excel_dir)
-    if not excel_files:
-        logger.warning("対象のExcelファイルが見つかりません。")
-        return
-
-    logger.info(f"PDF数: {len(pdf_files)}, Excel数: {len(excel_files)}")
-
+    Args:
+        input_items: [(file_path, data_dict), ...] のリスト。
+                     data_dictはextract済みの構造化データ。Noneなら抽出失敗。
+    Returns:
+        (success_list, no_name_list, no_match_list, multi_match_list,
+         unmatched_excels, backup_log, move_log, protected_log,
+         processed_paths)
+    """
     backup_base = os.path.join(excel_dir, "backups")
     processed_base = os.path.join(excel_dir, "processed")
 
     success_list = []
-    no_match_pdfs = []
-    no_name_pdfs = []
-    multi_match_pdfs = []
+    no_match_list = []
+    no_name_list = []
+    multi_match_list = []
     unmatched_excels = set(excel_files)
     backup_log = []
     move_log = []
     protected_log = []
-    processed_pdf_paths = []
+    processed_paths = []
 
-    for pdf_path in sorted(pdf_files):
-        pdf_name = os.path.basename(pdf_path)
-        logger.info(f"\n--- 処理中: {pdf_name} ---")
+    for file_path, data in input_items:
+        file_name = os.path.basename(file_path)
 
-        try:
-            data = extract_data_from_pdf(pdf_path, config)
-        except Exception as e:
-            logger.error(f"  PDF解析エラー: {pdf_name} - {e}")
-            no_name_pdfs.append(pdf_name)
+        if data is None:
+            # 抽出失敗（呼び出し元で既にログ済み）
+            no_name_list.append(file_name)
             continue
 
-        surname = get_surname_from_pdf_data(data)
+        surname = get_surname(data)
 
         if not surname:
-            logger.warning(f"  氏名を抽出できませんでした: {pdf_name}")
-            no_name_pdfs.append(pdf_name)
+            logger.warning(f"  氏名を抽出できませんでした: {file_name}")
+            no_name_list.append(file_name)
             continue
 
         logger.info(f"  抽出氏名: {data.get('利用者氏名', '?')} (苗字: {surname})")
@@ -449,14 +449,14 @@ def process_all(config_path, pdf_dir, excel_dir, form_name="form1",
 
         if not matched:
             logger.warning(f"  一致するExcelファイルが見つかりません: 苗字「{surname}」")
-            no_match_pdfs.append((pdf_name, surname))
+            no_match_list.append((file_name, surname))
             continue
 
         if len(matched) > 1:
             logger.warning(f"  複数のExcelが一致しました ({len(matched)}件)。全てに書き込みます。")
-            multi_match_pdfs.append((pdf_name, [os.path.basename(f) for f in matched]))
+            multi_match_list.append((file_name, [os.path.basename(f) for f in matched]))
 
-        pdf_success = False
+        file_success = False
         for excel_path in matched:
             excel_name = os.path.basename(excel_path)
 
@@ -485,57 +485,154 @@ def process_all(config_path, pdf_dir, excel_dir, form_name="form1",
 
             for field, existing in protected:
                 logger.info(f"    🛡 {field}: 既存値「{existing}」を保護")
-                protected_log.append((pdf_name, field, existing))
+                protected_log.append((file_name, field, existing))
 
             if skipped:
                 logger.info(f"    (スキップ: {', '.join(skipped)})")
 
-            success_list.append((pdf_name, excel_name, len(written)))
+            success_list.append((file_name, excel_name, len(written)))
             unmatched_excels.discard(excel_path)
-            pdf_success = True
+            file_success = True
 
-        if pdf_success:
-            processed_pdf_paths.append(pdf_path)
+        if file_success:
+            processed_paths.append(file_path)
 
+    # 処理済みファイルを移動
     if not dry_run:
-        for pdf_path in processed_pdf_paths:
+        for path in processed_paths:
             try:
-                move_dest = move_processed_pdf(pdf_path, processed_base)
-                logger.info(f"  PDF移動: {os.path.basename(pdf_path)} → {move_dest}")
-                move_log.append((pdf_path, move_dest))
+                move_dest = move_processed_file(path, processed_base)
+                logger.info(f"  移動: {os.path.basename(path)} → {move_dest}")
+                move_log.append((path, move_dest))
             except Exception as e:
-                logger.error(f"  PDF移動失敗: {os.path.basename(pdf_path)} - {e}")
+                logger.error(f"  移動失敗: {os.path.basename(path)} - {e}")
 
+    return (success_list, no_name_list, no_match_list, multi_match_list,
+            unmatched_excels, backup_log, move_log, protected_log)
+
+
+# ---------------------------------------------------------------------------
+# メイン処理
+# ---------------------------------------------------------------------------
+def process_all(config_path, input_dir, excel_dir, form_name="form1",
+                mode="pdf", dry_run=False, log_file=None):
+    """入力ソースを処理してヒアリングシートに転記する。"""
+    setup_logging(log_file)
+    logger = logging.getLogger(__name__)
+
+    config = load_config(config_path)
+
+    # フォーム名の存在チェック
+    if form_name not in config.get("fixed_cell_mapping", {}):
+        logger.error(f"フォーム「{form_name}」が config.json の fixed_cell_mapping に存在しません。")
+        sys.exit(1)
+
+    mode_label = "【ドライラン】" if dry_run else ""
+    source_label = "PDF" if mode == "pdf" else "基本情報Excel"
+    now = datetime.now()
+
+    logger.info(f"{'='*60}")
+    logger.info(f"{mode_label}{source_label} → ヒアリングシート 自動転記処理 開始")
+    logger.info(f"{'='*60}")
+    logger.info(f"入力モード:  {mode}")
+    logger.info(f"入力元:      {os.path.abspath(input_dir)}")
+    logger.info(f"Excel出力先: {os.path.abspath(excel_dir)}")
+    logger.info(f"フォーム:    {form_name}")
+
+    os.makedirs(input_dir, exist_ok=True)
+    os.makedirs(excel_dir, exist_ok=True)
+
+    # ヒアリングシート一覧
+    excel_files = find_excel_files(excel_dir)
+    if not excel_files:
+        logger.warning("対象のヒアリングシートExcelファイルが見つかりません。")
+        return
+
+    # --- 入力ソースの抽出 ---
+    input_items = []  # [(file_path, data_or_None), ...]
+
+    if mode == "pdf":
+        pdf_files = [
+            os.path.join(input_dir, f)
+            for f in os.listdir(input_dir)
+            if f.lower().endswith(".pdf")
+        ]
+        if not pdf_files:
+            logger.warning("処理対象のPDFファイルが見つかりません。")
+            return
+
+        logger.info(f"PDF数: {len(pdf_files)}, ヒアリングシート数: {len(excel_files)}")
+
+        for pdf_path in sorted(pdf_files):
+            pdf_name = os.path.basename(pdf_path)
+            logger.info(f"\n--- 処理中: {pdf_name} ---")
+            try:
+                data = extract_data_from_pdf(pdf_path, config)
+            except Exception as e:
+                logger.error(f"  PDF解析エラー: {pdf_name} - {e}")
+                data = None
+            input_items.append((pdf_path, data))
+
+    elif mode == "excel":
+        basic_info_files = find_basic_info_files(input_dir)
+        if not basic_info_files:
+            logger.warning("処理対象の基本情報シートが見つかりません。")
+            return
+
+        logger.info(f"基本情報シート数: {len(basic_info_files)}, ヒアリングシート数: {len(excel_files)}")
+
+        for bi_path in sorted(basic_info_files):
+            bi_name = os.path.basename(bi_path)
+            logger.info(f"\n--- 処理中: {bi_name} ---")
+            try:
+                data = extract_data_from_basic_info(bi_path, config)
+            except Exception as e:
+                logger.error(f"  基本情報シート解析エラー: {bi_name} - {e}")
+                data = None
+            input_items.append((bi_path, data))
+
+    else:
+        logger.error(f"不明なモード: {mode}")
+        sys.exit(1)
+
+    # --- 共通転記ループ ---
+    (success_list, no_name_list, no_match_list, multi_match_list,
+     unmatched_excels, backup_log, move_log, protected_log) = _process_inputs(
+        input_items, excel_files, config, excel_dir, form_name,
+        mode, dry_run, logger,
+    )
+
+    # --- サマリー出力 ---
     logger.info(f"\n{'='*60}")
     logger.info(f"{mode_label}処理結果サマリー")
     logger.info(f"{'='*60}")
 
     logger.info(f"\n[成功] {len(success_list)} 件")
-    for pdf_name, excel_name, count in success_list:
-        logger.info(f"  {pdf_name} → {excel_name} ({count}項目転記)")
+    for src_name, excel_name, count in success_list:
+        logger.info(f"  {src_name} → {excel_name} ({count}項目転記)")
 
     if protected_log:
         logger.info(f"\n[空欄保護] {len(protected_log)} 件")
-        for pdf_name, field, existing in protected_log:
-            logger.info(f"  {pdf_name}: {field} (既存値「{existing}」を保護)")
+        for src_name, field, existing in protected_log:
+            logger.info(f"  {src_name}: {field} (既存値「{existing}」を保護)")
 
-    if no_name_pdfs:
-        logger.warning(f"\n[未処理: 氏名抽出失敗] {len(no_name_pdfs)} 件")
-        for name in no_name_pdfs:
+    if no_name_list:
+        logger.warning(f"\n[未処理: 氏名抽出失敗] {len(no_name_list)} 件")
+        for name in no_name_list:
             logger.warning(f"  - {name}")
 
-    if no_match_pdfs:
-        logger.warning(f"\n[未処理: Excel照合失敗] {len(no_match_pdfs)} 件")
-        for pdf_name, surname in no_match_pdfs:
-            logger.warning(f"  - {pdf_name} (苗字: {surname})")
+    if no_match_list:
+        logger.warning(f"\n[未処理: ヒアリングシート照合失敗] {len(no_match_list)} 件")
+        for src_name, surname in no_match_list:
+            logger.warning(f"  - {src_name} (苗字: {surname})")
 
-    if multi_match_pdfs:
-        logger.info(f"\n[注意: 複数Excel一致] {len(multi_match_pdfs)} 件")
-        for pdf_name, excel_names in multi_match_pdfs:
-            logger.info(f"  - {pdf_name} → {', '.join(excel_names)}")
+    if multi_match_list:
+        logger.info(f"\n[注意: 複数Excel一致] {len(multi_match_list)} 件")
+        for src_name, excel_names in multi_match_list:
+            logger.info(f"  - {src_name} → {', '.join(excel_names)}")
 
     if unmatched_excels:
-        logger.info(f"\n[情報: 対応PDFなしのExcel] {len(unmatched_excels)} 件")
+        logger.info(f"\n[情報: 対応入力なしのExcel] {len(unmatched_excels)} 件")
         for path in sorted(unmatched_excels):
             logger.info(f"  - {os.path.basename(path)}")
 
@@ -543,14 +640,15 @@ def process_all(config_path, pdf_dir, excel_dir, form_name="form1",
         logger.info(f"\n[バックアップ] {len(backup_log)} 件作成済み")
 
     if move_log:
-        logger.info(f"[PDF移動] {len(move_log)} 件を processed/ へ移動")
+        logger.info(f"[ファイル移動] {len(move_log)} 件を processed/ へ移動")
 
+    # レポートファイル生成
     report_name = f"report_{now.strftime('%Y%m%d')}.txt"
     report_path = os.path.join(excel_dir, report_name)
     generate_report(
-        report_path, success_list, no_name_pdfs, no_match_pdfs,
-        multi_match_pdfs, unmatched_excels, backup_log, move_log,
-        protected_log, dry_run=dry_run,
+        report_path, success_list, no_name_list, no_match_list,
+        multi_match_list, unmatched_excels, backup_log, move_log,
+        protected_log, mode=mode, dry_run=dry_run,
     )
     logger.info(f"\n[レポート] {report_path}")
 
@@ -561,22 +659,34 @@ def process_all(config_path, pdf_dir, excel_dir, form_name="form1",
 
 def main():
     parser = argparse.ArgumentParser(
-        description="PDF利用者情報 → Excel ヒアリングシート 自動転記"
+        description="利用者情報 → Excel ヒアリングシート 自動転記"
     )
     parser.add_argument("--config", default="config.json", help="設定ファイルパス")
-    parser.add_argument("--pdf-dir", default="input_pdf", help="PDF入力ディレクトリ")
-    parser.add_argument("--excel-dir", default="excel_sheets", help="Excelファイルディレクトリ")
+    parser.add_argument("--mode", default="pdf", choices=["pdf", "excel"],
+                        help="入力モード: pdf=PDF解析, excel=基本情報シート読取 (デフォルト: pdf)")
+    parser.add_argument("--input-dir", default=None,
+                        help="入力ディレクトリ (デフォルト: pdf→input_pdf, excel→input_excel)")
+    parser.add_argument("--excel-dir", default="excel_sheets",
+                        help="ヒアリングシート格納ディレクトリ")
     parser.add_argument("--form", default="form1",
                         help="書き込み先フォーム名 (デフォルト: form1)")
-    parser.add_argument("--dry-run", action="store_true", help="ドライラン（書き込みせず確認のみ）")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="ドライラン（書き込みせず確認のみ）")
     parser.add_argument("--log-file", default=None, help="ログファイルパス")
     args = parser.parse_args()
 
+    # 入力ディレクトリのデフォルト値をモードに応じて設定
+    if args.input_dir is None:
+        input_dir = "input_pdf" if args.mode == "pdf" else "input_excel"
+    else:
+        input_dir = args.input_dir
+
     process_all(
         config_path=args.config,
-        pdf_dir=args.pdf_dir,
+        input_dir=input_dir,
         excel_dir=args.excel_dir,
         form_name=args.form,
+        mode=args.mode,
         dry_run=args.dry_run,
         log_file=args.log_file,
     )
