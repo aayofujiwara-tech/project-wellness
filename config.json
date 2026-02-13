@@ -39,18 +39,68 @@
       "(要支援[１-２1-2])"
     ]
   },
+  "excel_cell_mapping": {
+    "_comment": "実物テンプレート（Sheet3）の固定セル位置マッピング。上段フォーム=form1, 下段フォーム=form2",
+    "form1": {
+      "利用者氏名": {
+        "cell": "E6",
+        "description": "名前ラベル(A6:A7)の右側、性別ラベルの位置に氏名を記入"
+      },
+      "ふりがな": {
+        "cell": "B6",
+        "description": "結合セルB6:D7。既存の「（ふりがな）」テキストを上書き",
+        "special_handling": "furigana_overwrite"
+      },
+      "性別": {
+        "cell": "E7",
+        "description": "「男・女」テンプレを該当する方に書き換え",
+        "special_handling": "gender_select"
+      },
+      "年齢": {
+        "cell": "G7",
+        "description": "「歳」の前に数字を入れる形式",
+        "special_handling": "age_with_suffix"
+      },
+      "電話番号": {
+        "cell": "H7",
+        "description": "電話番号ラベル(H6)の直下"
+      },
+      "住所": {
+        "cell": "B8",
+        "description": "結合セルB8:H8の左上セル"
+      },
+      "要介護度": {
+        "cell": "C9",
+        "description": "結合セルC9:H9。テキスト内の該当番号に○をつける形式",
+        "special_handling": "care_level_inline"
+      }
+    },
+    "form2": {
+      "利用者氏名": { "cell": "E23" },
+      "ふりがな":   { "cell": "B23", "special_handling": "furigana_overwrite" },
+      "性別":       { "cell": "E24", "special_handling": "gender_select" },
+      "年齢":       { "cell": "G24", "special_handling": "age_with_suffix" },
+      "電話番号":    { "cell": "H24" },
+      "住所":       { "cell": "B25" },
+      "要介護度":    { "cell": "C26", "special_handling": "care_level_inline" }
+    }
+  },
   "excel_label_mapping": {
+    "_comment": "ラベル走査によるフォールバック用。固定セルマッピングで見つからない場合に使用",
     "利用者氏名": {
       "labels": ["名前", "氏名", "お名前", "利用者氏名"],
       "direction": "right",
-      "offset_col": 1,
-      "offset_row": 0
+      "offset_col": 4,
+      "offset_row": 0,
+      "notes": "A6「名前」→ E6へ書き込み（B-Dはふりがな結合セルのため+4）"
     },
     "ふりがな": {
-      "labels": ["ふりがな", "フリガナ", "カナ"],
-      "direction": "right",
-      "offset_col": 1,
-      "offset_row": 0
+      "labels": ["ふりがな", "フリガナ", "カナ", "（ふりがな）"],
+      "direction": "same",
+      "offset_col": 0,
+      "offset_row": 0,
+      "special_handling": "furigana_overwrite",
+      "notes": "B6自体がラベル兼入力欄なので同セルを上書き"
     },
     "住所": {
       "labels": ["住所", "現住所"],
@@ -60,34 +110,32 @@
     },
     "性別": {
       "labels": ["性別"],
-      "direction": "right",
-      "offset_col": 1,
-      "offset_row": 0
-    },
-    "生年月日": {
-      "labels": ["生年月日"],
-      "direction": "right",
-      "offset_col": 1,
-      "offset_row": 0
+      "direction": "below",
+      "offset_col": 0,
+      "offset_row": 1,
+      "special_handling": "gender_select"
     },
     "年齢": {
       "labels": ["年齢"],
-      "direction": "right",
-      "offset_col": 1,
-      "offset_row": 0
+      "direction": "below",
+      "offset_col": 0,
+      "offset_row": 1,
+      "special_handling": "age_with_suffix"
     },
     "電話番号": {
       "labels": ["電話番号", "電話", "TEL"],
-      "direction": "right",
-      "offset_col": 1,
-      "offset_row": 0
+      "direction": "below",
+      "offset_col": 0,
+      "offset_row": 1,
+      "notes": "H6「電話番号」→ H7（利用者側。施設側はA4→B4）"
     },
     "要介護度": {
       "labels": ["要介護認定", "要介護度", "介護度"],
       "direction": "right",
-      "offset_col": 1,
+      "offset_col": 2,
       "offset_row": 0,
-      "special_handling": "care_level"
+      "special_handling": "care_level_inline",
+      "notes": "A9「要介護認定」(結合A9:B9) → C9（結合C9:H9）のテキスト加工"
     }
   },
   "care_level_mapping": {
@@ -99,6 +147,8 @@
     "要介護4": ["要介護4", "要介護４", "介護4", "介護４"],
     "要介護5": ["要介護5", "要介護５", "介護5", "介護５"]
   },
+  "target_form": "form1",
+  "target_sheet": "Sheet3",
   "facility_abbreviations": {
     "パシ": "パシフィック",
     "ルネ": "ルネサンス"
