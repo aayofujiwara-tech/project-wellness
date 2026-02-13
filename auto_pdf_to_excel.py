@@ -216,24 +216,54 @@ def _clean_name(name):
     return re.sub(r"[　\s]*様$", "", name).strip()
 
 
+# ---------------------------------------------------------------------------
+# 氏名・ふりがなセルアドレス（ハードコード定数）
+# 基本情報シートの実データ構造に基づく確定値。
+#   E9:O9 = 漢字氏名（結合セル）  ← 利用者氏名の唯一の取得元
+#   E8:O8 = ふりがな（結合セル）  ← ふりがなの唯一の取得元
+# config.json の excel_source_cell_mapping とも一致させること。
+# ---------------------------------------------------------------------------
+_NAME_CELL_ADDR = "E9"  # 漢字氏名 ★絶対に E8 にしないこと
+_FURI_CELL_ADDR = "E8"  # ふりがな
+
+
+def _is_likely_furigana(text):
+    """テキストがひらがな・カタカナ・空白のみで構成されているか判定する。
+
+    漢字氏名がふりがなで上書きされていないかの安全チェック用。
+    漢字が1文字でも含まれていれば False を返す。
+    """
+    if not text:
+        return False
+    for c in text:
+        if c in " \u3000":  # 半角・全角スペース
+            continue
+        if "\u3040" <= c <= "\u309F":  # ひらがな
+            continue
+        if "\u30A0" <= c <= "\u30FF":  # カタカナ
+            continue
+        return False  # 漢字やその他 → ふりがなではない
+    return True
+
+
 def _resolve_cell_addr(field_info, default_cell):
     """cell_map のフィールド定義からセルアドレスを取得する。"""
     if isinstance(field_info, dict):
-        return field_info["cell"]
+        return field_info.get("cell", default_cell)
     return field_info if field_info else default_cell
 
 
 def extract_data_from_excel(excel_path, config, logger=None):
     """基本情報シートExcelの全シートから利用者データを抽出する。
 
-    config["excel_source_cell_mapping"] で定義されたセル座標から値を読み取り、
-    config["skip_sheets"] に含まれるシートはスキップする。
-    氏名セルがダミーデータのシートも除外する。
-
-    ■ 氏名・ふりがなの確定ロジック:
-      - 利用者氏名は E9 セルから明示的に取得し、_clean_name 適用後に確定。
-      - ふりがなは E8 セルから明示的に取得し、別変数で確定。
-      - いずれも汎用ループから除外し、他セルの値による上書きを物理的に防止。
+    ■ 氏名確定ロジック（最重要 — ふりがな混入バグの根絶）:
+      1. 漢字氏名は E9 セルからハードコード定数で取得する。
+         config 経由の間接参照には依存しない。
+      2. ふりがなは E8 セルからハードコード定数で取得する。
+      3. data = {} の直後に data["利用者氏名"] と data["ふりがな"] を格納。
+      4. 汎用ループでは "利用者氏名" / "ふりがな" を continue で除外し、
+         他セルの値による上書きを物理的に遮断する。
+      5. 確定した氏名がひらがなのみの場合は警告ログを出力する。
 
     Returns:
         list[tuple[str, dict]]: (シート名, データ辞書) のリスト。
@@ -244,12 +274,19 @@ def extract_data_from_excel(excel_path, config, logger=None):
     wb = load_workbook(excel_path, data_only=True)
     results = []
 
-    # --- 氏名・ふりがなのセルアドレスを事前に確定 ---
-    name_cell_addr = _resolve_cell_addr(cell_map.get("利用者氏名", {"cell": "E9"}), "E9")
-    furi_cell_addr = _resolve_cell_addr(cell_map.get("ふりがな", {"cell": "E8"}), "E8")
-
-    # 汎用ループから除外するフィールド名（明示管理対象）
-    explicit_fields = {"利用者氏名", "ふりがな"}
+    # --- config との整合性チェック（起動時1回） ---
+    cfg_name = _resolve_cell_addr(cell_map.get("利用者氏名", {}), _NAME_CELL_ADDR)
+    cfg_furi = _resolve_cell_addr(cell_map.get("ふりがな", {}), _FURI_CELL_ADDR)
+    if cfg_name != _NAME_CELL_ADDR and logger:
+        logger.warning(
+            f"  [CONFIG警告] excel_source_cell_mapping.利用者氏名={cfg_name} が "
+            f"ハードコード値 {_NAME_CELL_ADDR} と不一致。{_NAME_CELL_ADDR} を強制使用します。"
+        )
+    if cfg_furi != _FURI_CELL_ADDR and logger:
+        logger.warning(
+            f"  [CONFIG警告] excel_source_cell_mapping.ふりがな={cfg_furi} が "
+            f"ハードコード値 {_FURI_CELL_ADDR} と不一致。{_FURI_CELL_ADDR} を強制使用します。"
+        )
 
     for ws in wb.worksheets:
         sheet_name = ws.title
@@ -257,42 +294,57 @@ def extract_data_from_excel(excel_path, config, logger=None):
         # スキップ対象シート
         if sheet_name in skip_sheets:
             if logger:
-                logger.info(f"  [SKIP] シート「{sheet_name}」: スキップ対象のためスキップ")
+                logger.info(f"  [SKIP] シート「{sheet_name}」: スキップ対象")
             continue
 
-        # ========================================
-        # 1. 氏名の早期確定 (E9)
-        # ========================================
-        raw_name = ws[name_cell_addr].value
+        # ============================================================
+        # STEP 1: 氏名セル(E9)のバリデーション
+        # ============================================================
+        raw_name = ws[_NAME_CELL_ADDR].value
         if _is_dummy_name(raw_name):
-            reason = "空欄" if not raw_name or not str(raw_name).strip() else f"ダミーデータ「{str(raw_name).strip()}」"
+            reason = (
+                "空欄"
+                if not raw_name or not str(raw_name).strip()
+                else f"ダミー「{str(raw_name).strip()}」"
+            )
             if logger:
-                logger.info(f"  [SKIP] シート「{sheet_name}」: {reason}")
+                logger.info(f"  [SKIP] シート「{sheet_name}」: 氏名セル({_NAME_CELL_ADDR})が{reason}")
             continue
-        confirmed_name = _clean_name(normalize_text(str(raw_name).strip()))
 
-        # ========================================
-        # 2. ふりがなの明示取得 (E8)
-        # ========================================
-        raw_furi = ws[furi_cell_addr].value
-        confirmed_furi = normalize_text(str(raw_furi).strip()) if raw_furi else None
-
-        # ========================================
-        # 3. 確定値を data に先行格納
-        # ========================================
+        # ============================================================
+        # STEP 2: data 辞書初期化 → 直後に氏名を確定格納（最優先）
+        # ============================================================
         data = {}
-        data["利用者氏名"] = confirmed_name
-        if confirmed_furi:
-            data["ふりがな"] = confirmed_furi
+        data["利用者氏名"] = _clean_name(normalize_text(str(raw_name).strip()))
 
-        # ========================================
-        # 4. その他フィールドの汎用抽出（氏名・ふりがなはスキップ）
-        # ========================================
+        # ============================================================
+        # STEP 3: ふりがなを E8 から取得（氏名とは別変数・別キー）
+        # ============================================================
+        raw_furi = ws[_FURI_CELL_ADDR].value
+        if raw_furi and str(raw_furi).strip():
+            data["ふりがな"] = normalize_text(str(raw_furi).strip())
+
+        # ============================================================
+        # STEP 4: 安全チェック — 氏名がひらがなのみなら警告
+        # ============================================================
+        if _is_likely_furigana(data["利用者氏名"]):
+            if logger:
+                logger.warning(
+                    f"  [WARN] シート「{sheet_name}」: 氏名「{data['利用者氏名']}」が"
+                    f"ひらがな/カタカナのみです。セル {_NAME_CELL_ADDR} の値を確認してください。"
+                )
+
+        # ============================================================
+        # STEP 5: その他フィールドの汎用抽出
+        #   ★ "利用者氏名" と "ふりがな" は continue で完全除外 ★
+        # ============================================================
         for field_name, field_info in cell_map.items():
             if field_name.startswith("_"):
                 continue  # _comment 等をスキップ
-            if field_name in explicit_fields:
-                continue  # 氏名・ふりがなは上で確定済み → 上書き防止
+            if field_name == "利用者氏名":
+                continue  # ← E9 で確定済み。絶対に上書きさせない
+            if field_name == "ふりがな":
+                continue  # ← E8 で確定済み。氏名と混同させない
             if isinstance(field_info, dict):
                 cell_addr = field_info["cell"]
                 parse_name = field_info.get("parse")
@@ -312,11 +364,14 @@ def extract_data_from_excel(excel_path, config, logger=None):
             if value is not None and value != "":
                 data[field_name] = value
 
+        # ============================================================
+        # STEP 6: 最終ログ（E9 確定氏名を必ず表示）
+        # ============================================================
         if logger:
             logger.info(
                 f"  [OK] シート「{sheet_name}」: "
-                f"氏名={data['利用者氏名']}({name_cell_addr}), "
-                f"ふりがな={data.get('ふりがな', '(なし)')}({furi_cell_addr})"
+                f"氏名={data['利用者氏名']}(確定元:{_NAME_CELL_ADDR}), "
+                f"ふりがな={data.get('ふりがな', '(なし)')}(確定元:{_FURI_CELL_ADDR})"
             )
 
         results.append((sheet_name, data))

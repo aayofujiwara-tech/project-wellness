@@ -47,7 +47,8 @@
       "年齢":       { "cell": "G7", "format": "format_age" },
       "電話番号":   { "cell": "H7" },
       "住所":       { "cell": "B8" },
-      "要介護度":   { "cell": "C9", "format": "format_care_level_inline" }
+      "要介護度":   { "cell": "C9", "format": "format_care_level_inline" },
+      "主治医":     { "cell": "H15" }
     },
     "form2": {
       "利用者氏名": { "cell": "E23" },
@@ -56,7 +57,8 @@
       "年齢":       { "cell": "G24", "format": "format_age" },
       "電話番号":   { "cell": "H24" },
       "住所":       { "cell": "B25" },
-      "要介護度":   { "cell": "C26", "format": "format_care_level_inline" }
+      "要介護度":   { "cell": "C26", "format": "format_care_level_inline" },
+      "主治医":     { "cell": "H32" }
     }
   },
   "excel_source_cell_mapping": {
