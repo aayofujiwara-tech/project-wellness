@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""サンプルのPDFファイルとExcelファイルを生成するスクリプト。
+開発・テスト用途。"""
+
+import os
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+
+# reportlab で日本語フォント登録
+pdfmetrics.registerFont(UnicodeCIDFont("HeiseiMin-W3"))
+FONT_NAME = "HeiseiMin-W3"
+
+
+def create_sample_excel(filepath, facility_name, person_name):
+    """ヒアリングシート風のExcelファイルを作成する。"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "ヒアリングシート"
+
+    # スタイル定義
+    header_font = Font(name="游ゴシック", size=14, bold=True)
+    label_font = Font(name="游ゴシック", size=11, bold=True)
+    input_font = Font(name="游ゴシック", size=11)
+    thin_border = Border(
+        left=Side(style="thin"),
+        right=Side(style="thin"),
+        top=Side(style="thin"),
+        bottom=Side(style="thin"),
+    )
+    label_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+
+    # タイトル
+    ws.merge_cells("A1:F1")
+    ws["A1"] = f"{facility_name}　無料体験ヒアリングシート"
+    ws["A1"].font = header_font
+    ws["A1"].alignment = Alignment(horizontal="center")
+
+    # ラベルと入力欄のペア
+    labels = [
+        (3, "A", "名前"),
+        (4, "A", "ふりがな"),
+        (5, "A", "性別"),
+        (6, "A", "年齢"),
+        (7, "A", "生年月日"),
+        (8, "A", "住所"),
+        (9, "A", "電話番号"),
+        (10, "A", "要介護認定"),
+    ]
+
+    # 列幅設定
+    ws.column_dimensions["A"].width = 16
+    ws.column_dimensions["B"].width = 30
+    ws.column_dimensions["C"].width = 10
+    ws.column_dimensions["D"].width = 10
+    ws.column_dimensions["E"].width = 10
+    ws.column_dimensions["F"].width = 10
+
+    for row, col, label_text in labels:
+        cell = ws[f"{col}{row}"]
+        cell.value = label_text
+        cell.font = label_font
+        cell.border = thin_border
+        cell.fill = label_fill
+        cell.alignment = Alignment(vertical="center")
+
+        # 入力セル (B列)
+        input_cell = ws[f"B{row}"]
+        input_cell.border = thin_border
+        input_cell.font = input_font
+        input_cell.alignment = Alignment(vertical="center")
+
+    # 要介護認定の特別レイアウト: C10〜F10 に選択肢
+    care_levels = ["要支援1", "要支援2", "要介護1", "要介護2", "要介護3", "要介護4", "要介護5"]
+    # B10 をメイン入力欄として使い、下にも選択肢を配置
+    ws["B10"].value = ""
+    for i, level in enumerate(care_levels):
+        row_offset = 11 + i
+        ws[f"A{row_offset}"] = ""
+        ws[f"B{row_offset}"] = level
+        ws[f"B{row_offset}"].font = input_font
+        ws[f"B{row_offset}"].border = thin_border
+        ws[f"C{row_offset}"] = ""  # チェック欄
+        ws[f"C{row_offset}"].border = thin_border
+
+    # 追加項目
+    extra_start = 11 + len(care_levels) + 1
+    extra_labels = [
+        (extra_start, "A", "既往歴"),
+        (extra_start + 1, "A", "服薬情報"),
+        (extra_start + 2, "A", "備考"),
+    ]
+    for row, col, label_text in extra_labels:
+        cell = ws[f"{col}{row}"]
+        cell.value = label_text
+        cell.font = label_font
+        cell.border = thin_border
+        cell.fill = label_fill
+        input_cell = ws[f"B{row}"]
+        input_cell.border = thin_border
+        input_cell.font = input_font
+
+    wb.save(filepath)
+    print(f"  [Excel] 作成: {filepath}")
+
+
+def create_sample_pdf(filepath, data):
+    """利用者情報のサンプルPDFを作成する。"""
+    c = canvas.Canvas(filepath, pagesize=A4)
+    width, height = A4
+
+    c.setFont(FONT_NAME, 16)
+    c.drawString(40 * mm, height - 30 * mm, "利用者情報")
+
+    c.setFont(FONT_NAME, 11)
+    y = height - 50 * mm
+    line_height = 10 * mm
+
+    fields = [
+        ("氏名", data["氏名"]),
+        ("ふりがな", data["ふりがな"]),
+        ("性別", data["性別"]),
+        ("生年月日", data["生年月日"]),
+        ("年齢", data["年齢"]),
+        ("住所", data["住所"]),
+        ("電話番号", data["電話番号"]),
+        ("要介護度", data["要介護度"]),
+    ]
+
+    for label, value in fields:
+        c.drawString(30 * mm, y, f"{label}：{value}")
+        y -= line_height
+
+    c.save()
+    print(f"  [PDF]   作成: {filepath}")
+
+
+def main():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    pdf_dir = os.path.join(base_dir, "input_pdf")
+    os.makedirs(pdf_dir, exist_ok=True)
+
+    # サンプルデータ
+    sample_users = [
+        {
+            "施設名略称": "パシ",
+            "施設名正式": "パシフィック",
+            "氏名": "三代　花子",
+            "苗字": "三代",
+            "ふりがな": "みしろ はなこ",
+            "性別": "女性",
+            "生年月日": "昭和15年3月10日",
+            "年齢": "85歳",
+            "住所": "岡山県笠岡市中央町1-2-3",
+            "電話番号": "0865-12-3456",
+            "要介護度": "要介護2",
+        },
+        {
+            "施設名略称": "ルネ",
+            "施設名正式": "ルネサンス",
+            "氏名": "笠岡　太郎",
+            "苗字": "笠岡",
+            "ふりがな": "かさおか たろう",
+            "性別": "男性",
+            "生年月日": "昭和10年7月20日",
+            "年齢": "90歳",
+            "住所": "岡山県笠岡市港町4-5-6",
+            "電話番号": "0865-78-9012",
+            "要介護度": "要介護3",
+        },
+        {
+            "施設名略称": "パシ",
+            "施設名正式": "パシフィック",
+            "氏名": "山田　次郎",
+            "苗字": "山田",
+            "ふりがな": "やまだ じろう",
+            "性別": "男性",
+            "生年月日": "昭和20年1月15日",
+            "年齢": "80歳",
+            "住所": "岡山県倉敷市本町7-8-9",
+            "電話番号": "086-123-4567",
+            "要介護度": "要支援1",
+        },
+    ]
+
+    print("=== サンプルデータ生成 ===\n")
+
+    for user in sample_users:
+        # Excel ファイル生成
+        excel_name = f"{user['施設名略称']}{user['苗字']}さん　無料体験ヒアリングシート.xlsx"
+        excel_path = os.path.join(base_dir, excel_name)
+        create_sample_excel(excel_path, user["施設名正式"], user["苗字"])
+
+        # PDF ファイル生成
+        pdf_name = f"利用者情報_{user['氏名'].replace('　', '')}.pdf"
+        pdf_path = os.path.join(pdf_dir, pdf_name)
+        create_sample_pdf(pdf_path, user)
+
+    # 照合失敗テスト用: Excelに対応するPDFがないケース
+    excel_no_match = os.path.join(base_dir, "パシ田中さん　無料体験ヒアリングシート.xlsx")
+    create_sample_excel(excel_no_match, "パシフィック", "田中")
+
+    print("\n=== 生成完了 ===")
+    print(f"PDF格納先: {pdf_dir}")
+    print(f"Excel格納先: {base_dir}")
+
+
+if __name__ == "__main__":
+    main()

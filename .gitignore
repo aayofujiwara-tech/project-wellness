@@ -1,0 +1,14 @@
+# サンプル・生成データ
+*.xlsx
+input_pdf/*.pdf
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# ログ
+*.log
