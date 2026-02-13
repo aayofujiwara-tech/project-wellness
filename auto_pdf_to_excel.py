@@ -223,6 +223,9 @@ def extract_data_from_excel(excel_path, config, logger=None):
     config["skip_sheets"] に含まれるシートはスキップする。
     氏名セルがダミーデータのシートも除外する。
 
+    氏名は必ず config の「利用者氏名」セル（E9）から取得し、
+    ふりがな（E8）等と混同しないよう明示的に確定格納する。
+
     Returns:
         list[tuple[str, dict]]: (シート名, データ辞書) のリスト。
         有効なシートがなければ空リスト。
@@ -231,6 +234,10 @@ def extract_data_from_excel(excel_path, config, logger=None):
     skip_sheets = config.get("skip_sheets", ["原本"])
     wb = load_workbook(excel_path, data_only=True)
     results = []
+
+    # 氏名セルアドレスを事前に確定（デフォルト: E9）
+    name_field_info = cell_map.get("利用者氏名", {"cell": "E9"})
+    name_cell_addr = name_field_info["cell"] if isinstance(name_field_info, dict) else name_field_info
 
     for ws in wb.worksheets:
         sheet_name = ws.title
@@ -241,21 +248,25 @@ def extract_data_from_excel(excel_path, config, logger=None):
                 logger.info(f"  [SKIP] シート「{sheet_name}」: スキップ対象のためスキップ")
             continue
 
-        # 氏名セルのバリデーション
-        name_info = cell_map.get("利用者氏名", {"cell": "E9"})
-        name_cell = name_info["cell"] if isinstance(name_info, dict) else name_info
-        raw_name = ws[name_cell].value
+        # 氏名セル(E9)のバリデーション
+        raw_name = ws[name_cell_addr].value
         if _is_dummy_name(raw_name):
             reason = "空欄" if not raw_name or not str(raw_name).strip() else f"ダミーデータ「{str(raw_name).strip()}」"
             if logger:
                 logger.info(f"  [SKIP] シート「{sheet_name}」: {reason}")
             continue
 
-        # データ抽出
+        # 氏名を最初に確定格納（E9セルの漢字氏名）
+        confirmed_name = _clean_name(normalize_text(str(raw_name).strip()))
+
+        # その他フィールドの抽出
         data = {}
         for field_name, field_info in cell_map.items():
             if field_name.startswith("_"):
                 continue  # _comment 等をスキップ
+            # 利用者氏名は既にバリデーション時に確定済みなのでスキップ
+            if field_name == "利用者氏名":
+                continue
             if isinstance(field_info, dict):
                 cell_addr = field_info["cell"]
                 parse_name = field_info.get("parse")
@@ -275,12 +286,11 @@ def extract_data_from_excel(excel_path, config, logger=None):
             if value is not None and value != "":
                 data[field_name] = value
 
-        # 氏名の「様」を除去
-        if "利用者氏名" in data:
-            data["利用者氏名"] = _clean_name(data["利用者氏名"])
+        # 確定済みの漢字氏名を格納（ループ結果で上書きされない）
+        data["利用者氏名"] = confirmed_name
 
         if logger:
-            logger.info(f"  [OK] シート「{sheet_name}」: 氏名={data.get('利用者氏名', '?')}")
+            logger.info(f"  [OK] シート「{sheet_name}」: 氏名={data['利用者氏名']} (セル {name_cell_addr})")
 
         results.append((sheet_name, data))
 
@@ -559,13 +569,16 @@ def _process_inputs(input_items, excel_files, config, excel_dir, form_name,
                     mode, dry_run, logger):
     """入力ソース(PDF or 基本情報Excel)のリストを処理する共通ループ。
 
+    1つの入力ファイルに複数シート（複数人）が含まれる場合、同一ファイルパスが
+    input_items に複数回登場する。ファイル移動は全シートの転記が完了した後に
+    重複排除して1回だけ実行する。
+
     Args:
         input_items: [(file_path, data_dict), ...] のリスト。
                      data_dictはextract済みの構造化データ。Noneなら抽出失敗。
     Returns:
         (success_list, no_name_list, no_match_list, multi_match_list,
-         unmatched_excels, backup_log, move_log, protected_log,
-         processed_paths)
+         unmatched_excels, backup_log, move_log, protected_log)
     """
     backup_base = os.path.join(excel_dir, "backups")
     processed_base = os.path.join(excel_dir, "processed")
@@ -578,7 +591,8 @@ def _process_inputs(input_items, excel_files, config, excel_dir, form_name,
     backup_log = []
     move_log = []
     protected_log = []
-    processed_paths = []
+    # 処理成功したファイルパスを set で管理（重複排除）
+    unique_paths = set()
 
     for file_path, data in input_items:
         file_name = os.path.basename(file_path)
@@ -647,18 +661,19 @@ def _process_inputs(input_items, excel_files, config, excel_dir, form_name,
             file_success = True
 
         if file_success:
-            processed_paths.append(file_path)
+            unique_paths.add(file_path)
 
-    # 処理済みファイルを移動（重複排除）
+    # --- 全シート処理完了後にファイルを移動（unique_paths で重複なし） ---
     if not dry_run:
-        for path in sorted(set(processed_paths)):
+        for path in sorted(unique_paths):
+            if not os.path.exists(path):
+                logger.warning(f"  移動スキップ（既に移動済み）: {os.path.basename(path)}")
+                continue
             try:
                 move_dest = move_processed_file(path, processed_base)
                 logger.info(f"  移動: {os.path.basename(path)} → {move_dest}")
                 move_log.append((path, move_dest))
             except Exception as e:
-                if not os.path.exists(path):
-                    continue
                 logger.error(f"  移動失敗: {os.path.basename(path)} - {e}")
 
     return (success_list, no_name_list, no_match_list, multi_match_list,
