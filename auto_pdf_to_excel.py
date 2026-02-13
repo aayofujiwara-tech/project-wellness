@@ -216,6 +216,13 @@ def _clean_name(name):
     return re.sub(r"[　\s]*様$", "", name).strip()
 
 
+def _resolve_cell_addr(field_info, default_cell):
+    """cell_map のフィールド定義からセルアドレスを取得する。"""
+    if isinstance(field_info, dict):
+        return field_info["cell"]
+    return field_info if field_info else default_cell
+
+
 def extract_data_from_excel(excel_path, config, logger=None):
     """基本情報シートExcelの全シートから利用者データを抽出する。
 
@@ -223,8 +230,10 @@ def extract_data_from_excel(excel_path, config, logger=None):
     config["skip_sheets"] に含まれるシートはスキップする。
     氏名セルがダミーデータのシートも除外する。
 
-    氏名は必ず config の「利用者氏名」セル（E9）から取得し、
-    ふりがな（E8）等と混同しないよう明示的に確定格納する。
+    ■ 氏名・ふりがなの確定ロジック:
+      - 利用者氏名は E9 セルから明示的に取得し、_clean_name 適用後に確定。
+      - ふりがなは E8 セルから明示的に取得し、別変数で確定。
+      - いずれも汎用ループから除外し、他セルの値による上書きを物理的に防止。
 
     Returns:
         list[tuple[str, dict]]: (シート名, データ辞書) のリスト。
@@ -235,9 +244,12 @@ def extract_data_from_excel(excel_path, config, logger=None):
     wb = load_workbook(excel_path, data_only=True)
     results = []
 
-    # 氏名セルアドレスを事前に確定（デフォルト: E9）
-    name_field_info = cell_map.get("利用者氏名", {"cell": "E9"})
-    name_cell_addr = name_field_info["cell"] if isinstance(name_field_info, dict) else name_field_info
+    # --- 氏名・ふりがなのセルアドレスを事前に確定 ---
+    name_cell_addr = _resolve_cell_addr(cell_map.get("利用者氏名", {"cell": "E9"}), "E9")
+    furi_cell_addr = _resolve_cell_addr(cell_map.get("ふりがな", {"cell": "E8"}), "E8")
+
+    # 汎用ループから除外するフィールド名（明示管理対象）
+    explicit_fields = {"利用者氏名", "ふりがな"}
 
     for ws in wb.worksheets:
         sheet_name = ws.title
@@ -248,25 +260,39 @@ def extract_data_from_excel(excel_path, config, logger=None):
                 logger.info(f"  [SKIP] シート「{sheet_name}」: スキップ対象のためスキップ")
             continue
 
-        # 氏名セル(E9)のバリデーション
+        # ========================================
+        # 1. 氏名の早期確定 (E9)
+        # ========================================
         raw_name = ws[name_cell_addr].value
         if _is_dummy_name(raw_name):
             reason = "空欄" if not raw_name or not str(raw_name).strip() else f"ダミーデータ「{str(raw_name).strip()}」"
             if logger:
                 logger.info(f"  [SKIP] シート「{sheet_name}」: {reason}")
             continue
-
-        # 氏名を最初に確定格納（E9セルの漢字氏名）
         confirmed_name = _clean_name(normalize_text(str(raw_name).strip()))
 
-        # その他フィールドの抽出
+        # ========================================
+        # 2. ふりがなの明示取得 (E8)
+        # ========================================
+        raw_furi = ws[furi_cell_addr].value
+        confirmed_furi = normalize_text(str(raw_furi).strip()) if raw_furi else None
+
+        # ========================================
+        # 3. 確定値を data に先行格納
+        # ========================================
         data = {}
+        data["利用者氏名"] = confirmed_name
+        if confirmed_furi:
+            data["ふりがな"] = confirmed_furi
+
+        # ========================================
+        # 4. その他フィールドの汎用抽出（氏名・ふりがなはスキップ）
+        # ========================================
         for field_name, field_info in cell_map.items():
             if field_name.startswith("_"):
                 continue  # _comment 等をスキップ
-            # 利用者氏名は既にバリデーション時に確定済みなのでスキップ
-            if field_name == "利用者氏名":
-                continue
+            if field_name in explicit_fields:
+                continue  # 氏名・ふりがなは上で確定済み → 上書き防止
             if isinstance(field_info, dict):
                 cell_addr = field_info["cell"]
                 parse_name = field_info.get("parse")
@@ -286,11 +312,12 @@ def extract_data_from_excel(excel_path, config, logger=None):
             if value is not None and value != "":
                 data[field_name] = value
 
-        # 確定済みの漢字氏名を格納（ループ結果で上書きされない）
-        data["利用者氏名"] = confirmed_name
-
         if logger:
-            logger.info(f"  [OK] シート「{sheet_name}」: 氏名={data['利用者氏名']} (セル {name_cell_addr})")
+            logger.info(
+                f"  [OK] シート「{sheet_name}」: "
+                f"氏名={data['利用者氏名']}({name_cell_addr}), "
+                f"ふりがな={data.get('ふりがな', '(なし)')}({furi_cell_addr})"
+            )
 
         results.append((sheet_name, data))
 
