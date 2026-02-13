@@ -6,13 +6,12 @@ Excelヒアリングシートへデータを自動転記する。
 
 運用方針:
     デフォルトで上段フォーム（form1）に書き込む。
-    下段（form2）は将来用としてコード内に保持するが、通常は使用しない。
-    必要に応じて --form form2 で切り替え可能。
+    下段（form2）は --form form2 で切り替え可能。
 
 使い方:
     python auto_pdf_to_excel.py                          # 上段(form1)に転記
     python auto_pdf_to_excel.py --dry-run                # 書き込みせずに確認のみ
-    python auto_pdf_to_excel.py --form form2             # 下段(form2)に転記（将来用）
+    python auto_pdf_to_excel.py --form form2             # 下段(form2)に転記
     python auto_pdf_to_excel.py --config config.json --pdf-dir input_pdf --excel-dir excel_sheets
 """
 
@@ -28,7 +27,6 @@ from datetime import datetime
 
 import fitz  # pymupdf
 from openpyxl import load_workbook
-from openpyxl.utils import column_index_from_string, get_column_letter
 
 # ---------------------------------------------------------------------------
 # ロギング設定
@@ -60,24 +58,6 @@ def load_config(config_path):
 def normalize_text(text):
     """全角英数字・記号を半角に正規化する。"""
     return unicodedata.normalize("NFKC", text)
-
-
-# ---------------------------------------------------------------------------
-# セル座標ユーティリティ
-# ---------------------------------------------------------------------------
-def parse_cell_ref(cell_ref):
-    """'E6' のようなセル参照文字列を (row, col) タプルに変換する。"""
-    match = re.match(r"([A-Z]+)(\d+)", cell_ref.upper())
-    if not match:
-        raise ValueError(f"無効なセル参照: {cell_ref}")
-    col = column_index_from_string(match.group(1))
-    row = int(match.group(2))
-    return row, col
-
-
-def cell_ref_str(row, col):
-    """(row, col) タプルを 'E6' 形式の文字列に変換する。"""
-    return f"{get_column_letter(col)}{row}"
 
 
 # ---------------------------------------------------------------------------
@@ -206,14 +186,10 @@ def normalize_care_level(value, config):
 
 
 # ---------------------------------------------------------------------------
-# 特殊処理: 性別
+# フォーマット関数群
 # ---------------------------------------------------------------------------
 def format_gender(value):
-    """性別の値を「男・女」形式のテンプレートから選択した表現に変換する。
-
-    例: "男" or "男性" → "男" (「男・女」の「女」を消した表現)
-    実際には該当する性別の文字だけを残すか、シンプルに「男」「女」を書き込む。
-    """
+    """性別を短縮形に変換する。男性→男, 女性→女"""
     normalized = normalize_text(value.strip())
     if "男" in normalized:
         return "男"
@@ -222,47 +198,34 @@ def format_gender(value):
     return normalized
 
 
-# ---------------------------------------------------------------------------
-# 特殊処理: 年齢（「歳」付き）
-# ---------------------------------------------------------------------------
 def format_age(value):
-    """年齢の値に「歳」を付与する。既に「歳」がある場合はそのまま。"""
+    """年齢に「歳」を付与する。既に「歳」があればそのまま。"""
     normalized = normalize_text(str(value).strip())
-    # 数字だけ抽出
     age_match = re.search(r"(\d+)", normalized)
     if age_match:
         return f"{age_match.group(1)}歳"
     return normalized
 
 
-# ---------------------------------------------------------------------------
-# 特殊処理: 要介護度（インライン丸つけ方式）
-# ---------------------------------------------------------------------------
+def format_furigana(value):
+    """ふりがなの括弧を除去する。"""
+    cleaned = re.sub(r"[（()）]", "", value)
+    return cleaned.strip()
+
+
 def format_care_level_inline(value, config):
-    """要介護度をインライン丸つけ形式の文字列に変換する。
+    """要介護度を丸数字に変換してインライン文字列を返す。
 
-    元のセル内容: 「要支援（ １・２ ）／ 要介護（ 1・2・3・4・5 ）」
-    → 該当する番号を○で囲む形式に書き換える。
-
-    例: 要介護3 → 「要支援（ １・２ ）／ 要介護（ 1・2・③・4・5 ）」
-    または丸数字が使えない場合: 該当番号を【】で囲む等
+    例: "要介護3" → "要支援（ １・２ ）　／　要介護（ 1・2・③・4・5 ）"
     """
     canonical = normalize_care_level(value, config)
+    circled = {"1": "①", "2": "②", "3": "③", "4": "④", "5": "⑤"}
 
-    # 「要支援X」か「要介護X」かを判定
     support_match = re.match(r"要支援(\d)", canonical)
     care_match = re.match(r"要介護(\d)", canonical)
 
-    # ベースとなるテンプレート文字列
-    # 丸数字マッピング
-    circled_nums = {
-        "1": "①", "2": "②", "3": "③", "4": "④", "5": "⑤"
-    }
-
     if support_match:
         num = support_match.group(1)
-        circled = circled_nums.get(num, f"【{num}】")
-        # 要支援側の該当番号を丸数字に置換
         support_part = "１・２"
         if num == "1":
             support_part = "①・２"
@@ -272,166 +235,30 @@ def format_care_level_inline(value, config):
 
     elif care_match:
         num = care_match.group(1)
-        circled = circled_nums.get(num, f"【{num}】")
-        # 要介護側の該当番号を丸数字に置換
         nums_list = ["1", "2", "3", "4", "5"]
         formatted_nums = []
         for n in nums_list:
             if n == num:
-                formatted_nums.append(circled_nums[n])
+                formatted_nums.append(circled[n])
             else:
                 formatted_nums.append(n)
         care_part = "・".join(formatted_nums)
         return f"要支援（ １・２ ）　／　要介護（ {care_part} ）"
 
-    # パース失敗時はそのまま返す
     return canonical
 
 
 # ---------------------------------------------------------------------------
-# 特殊処理: ふりがな（既存テキスト上書き）
+# Excel 座標指定書き込み (fixed_cell_mapping 方式)
 # ---------------------------------------------------------------------------
-def format_furigana(value):
-    """ふりがなの値をフォーマットする。括弧があれば除去。"""
-    cleaned = value.strip()
-    # 「（」「）」で囲まれていたら除去
-    cleaned = re.sub(r"[（()）]", "", cleaned)
-    return cleaned.strip()
+def write_data_to_excel(filepath, data, config, form_name="form1", dry_run=False):
+    """固定座標指定方式でExcelにデータを書き込む。
 
-
-# ---------------------------------------------------------------------------
-# Excel書き込み（固定セル座標方式 - メインロジック）
-# ---------------------------------------------------------------------------
-def write_data_to_excel_fixed(filepath, data, config, dry_run=False):
-    """固定セル座標マッピングを使用してExcelにデータを書き込む。
-
-    config['excel_cell_mapping'] の form1/form2 から対象セル座標を取得し、
-    特殊処理が必要なフィールドは適切にフォーマットして書き込む。
+    config["fixed_cell_mapping"][form_name] のセル座標に直接書き込む。
+    空値(None)の場合は既存データを保護し上書きしない。
     """
-    logger = logging.getLogger(__name__)
-
-    target_form = config.get("target_form", "form1")
-    target_sheet = config.get("target_sheet", None)
-    cell_mapping = config.get("excel_cell_mapping", {})
-    form_map = cell_mapping.get(target_form, {})
-
-    if not form_map:
-        logger.warning(f"  excel_cell_mapping に '{target_form}' が見つかりません。ラベル走査にフォールバック。")
-        return None  # フォールバック指示
-
-    wb = load_workbook(filepath)
-
-    # シート選択
-    if target_sheet and target_sheet in wb.sheetnames:
-        ws = wb[target_sheet]
-    else:
-        ws = wb.active
-        logger.info(f"  対象シート '{target_sheet}' が見つからないためアクティブシートを使用: {ws.title}")
-
-    written_fields = []
-    skipped_fields = []
-    protected_fields = []
-
-    for field_name, field_config in form_map.items():
-        # _comment等のメタキーをスキップ
-        if field_name.startswith("_"):
-            continue
-
-        value = data.get(field_name)
-
-        # 空欄保護
-        if value is None or (isinstance(value, str) and value.strip() == ""):
-            cell_ref = field_config.get("cell", "")
-            if cell_ref:
-                row, col = parse_cell_ref(cell_ref)
-                existing = ws.cell(row=row, column=col).value
-                if existing and str(existing).strip():
-                    protected_fields.append((field_name, str(existing)))
-                else:
-                    skipped_fields.append(field_name)
-            else:
-                skipped_fields.append(field_name)
-            continue
-
-        cell_ref = field_config.get("cell", "")
-        if not cell_ref:
-            skipped_fields.append(field_name)
-            continue
-
-        row, col = parse_cell_ref(cell_ref)
-        special = field_config.get("special_handling", "")
-
-        # 特殊処理の分岐
-        if special == "gender_select":
-            formatted_value = format_gender(value)
-        elif special == "age_with_suffix":
-            formatted_value = format_age(value)
-        elif special == "care_level_inline":
-            formatted_value = format_care_level_inline(value, config)
-        elif special == "furigana_overwrite":
-            formatted_value = format_furigana(value)
-        else:
-            formatted_value = value
-
-        if not dry_run:
-            ws.cell(row=row, column=col).value = formatted_value
-
-        written_fields.append((field_name, formatted_value, cell_ref))
-
-    if not dry_run:
-        wb.save(filepath)
-
-    wb.close()
-    return written_fields, skipped_fields, protected_fields
-
-
-# ---------------------------------------------------------------------------
-# Excel ラベル検索（フォールバック用）
-# ---------------------------------------------------------------------------
-def find_label_cell(ws, label_candidates, max_row=None):
-    """ワークシート内でラベル候補に一致するセルを検索する。
-
-    max_rowを指定すると、上段フォームのみに限定できる。
-    """
-    for row in ws.iter_rows(max_row=max_row):
-        for cell in row:
-            if cell.value is None:
-                continue
-            cell_text = str(cell.value).strip()
-            for label in label_candidates:
-                if label in cell_text:
-                    return cell.row, cell.column, cell_text
-    return None
-
-
-def find_target_cell(ws, label_info, max_row=None):
-    """ラベル設定に基づいて、入力先セルの座標を特定する。"""
-    result = find_label_cell(ws, label_info["labels"], max_row=max_row)
-    if result is None:
-        return None
-
-    label_row, label_col, matched_label = result
-    offset_col = label_info.get("offset_col", 1)
-    offset_row = label_info.get("offset_row", 0)
-
-    target_row = label_row + offset_row
-    target_col = label_col + offset_col
-
-    return target_row, target_col, matched_label
-
-
-# ---------------------------------------------------------------------------
-# Excel書き込み（ラベル走査方式 - フォールバック）
-# ---------------------------------------------------------------------------
-def write_data_to_excel_label(filepath, data, config, dry_run=False):
-    """ラベル走査方式でExcelにデータを書き込む（フォールバック用）。
-
-    上段フォームのみに書き込むようmax_row制限を適用。
-    """
-    logger = logging.getLogger(__name__)
-    mapping = config.get("excel_label_mapping", {})
-    target_sheet = config.get("target_sheet", None)
-
+    cell_mapping = config["fixed_cell_mapping"][form_name]
+    target_sheet = config.get("target_sheet")
     wb = load_workbook(filepath)
 
     if target_sheet and target_sheet in wb.sheetnames:
@@ -439,136 +266,45 @@ def write_data_to_excel_label(filepath, data, config, dry_run=False):
     else:
         ws = wb.active
 
-    # 上段フォームのみに制限（Row 17以内）
-    max_row_limit = 17
+    format_functions = {
+        "format_gender": format_gender,
+        "format_age": format_age,
+        "format_furigana": format_furigana,
+        "format_care_level_inline": lambda v: format_care_level_inline(v, config),
+    }
 
     written_fields = []
     skipped_fields = []
     protected_fields = []
 
-    for field_name, label_info in mapping.items():
-        if field_name.startswith("_"):
-            continue
-
+    for field_name, field_info in cell_mapping.items():
         value = data.get(field_name)
+        cell_addr = field_info["cell"]
 
+        # 空欄保護: 抽出結果がNoneまたは空文字の場合は既存値を保持
         if value is None or (isinstance(value, str) and value.strip() == ""):
-            result = find_label_cell(ws, label_info["labels"], max_row=max_row_limit)
-            if result:
-                target_row = result[0] + label_info.get("offset_row", 0)
-                target_col = result[1] + label_info.get("offset_col", 1)
-                existing = ws.cell(row=target_row, column=target_col).value
-                if existing:
-                    protected_fields.append((field_name, str(existing)))
-                else:
-                    skipped_fields.append(field_name)
+            existing = ws[cell_addr].value
+            if existing and str(existing).strip():
+                protected_fields.append((field_name, str(existing)))
             else:
                 skipped_fields.append(field_name)
             continue
 
-        special = label_info.get("special_handling", "")
+        # フォーマット関数を適用
+        fmt = field_info.get("format")
+        if fmt and fmt in format_functions:
+            value = format_functions[fmt](value)
 
-        if special == "care_level_inline":
-            result = find_label_cell(ws, label_info["labels"], max_row=max_row_limit)
-            if result is None:
-                skipped_fields.append(field_name)
-                continue
-            label_row, label_col, _ = result
-            offset_col = label_info.get("offset_col", 2)
-            offset_row = label_info.get("offset_row", 0)
-            target_row = label_row + offset_row
-            target_col = label_col + offset_col
-            formatted = format_care_level_inline(value, config)
-            if not dry_run:
-                ws.cell(row=target_row, column=target_col).value = formatted
-            ref = cell_ref_str(target_row, target_col)
-            written_fields.append((field_name, formatted, ref))
-            continue
-
-        if special == "gender_select":
-            result = find_target_cell(ws, label_info, max_row=max_row_limit)
-            if result is None:
-                skipped_fields.append(field_name)
-                continue
-            target_row, target_col, _ = result
-            formatted = format_gender(value)
-            if not dry_run:
-                ws.cell(row=target_row, column=target_col).value = formatted
-            ref = cell_ref_str(target_row, target_col)
-            written_fields.append((field_name, formatted, ref))
-            continue
-
-        if special == "age_with_suffix":
-            result = find_target_cell(ws, label_info, max_row=max_row_limit)
-            if result is None:
-                skipped_fields.append(field_name)
-                continue
-            target_row, target_col, _ = result
-            formatted = format_age(value)
-            if not dry_run:
-                ws.cell(row=target_row, column=target_col).value = formatted
-            ref = cell_ref_str(target_row, target_col)
-            written_fields.append((field_name, formatted, ref))
-            continue
-
-        if special == "furigana_overwrite":
-            result = find_label_cell(ws, label_info["labels"], max_row=max_row_limit)
-            if result is None:
-                skipped_fields.append(field_name)
-                continue
-            target_row = result[0]
-            target_col = result[1]
-            formatted = format_furigana(value)
-            if not dry_run:
-                ws.cell(row=target_row, column=target_col).value = formatted
-            ref = cell_ref_str(target_row, target_col)
-            written_fields.append((field_name, formatted, ref))
-            continue
-
-        # 通常のラベル検索 → 書き込み
-        result = find_target_cell(ws, label_info, max_row=max_row_limit)
-        if result is None:
-            skipped_fields.append(field_name)
-            continue
-
-        target_row, target_col, matched_label = result
         if not dry_run:
-            ws.cell(row=target_row, column=target_col).value = value
-        ref = cell_ref_str(target_row, target_col)
-        written_fields.append((field_name, value, ref))
+            ws[cell_addr].value = value
+
+        written_fields.append((field_name, value, cell_addr))
 
     if not dry_run:
         wb.save(filepath)
 
     wb.close()
     return written_fields, skipped_fields, protected_fields
-
-
-# ---------------------------------------------------------------------------
-# 統合書き込みエントリーポイント
-# ---------------------------------------------------------------------------
-def write_data_to_excel(filepath, data, config, dry_run=False):
-    """Excelへの書き込みを行う統合関数。
-
-    1. まず固定セル座標方式（excel_cell_mapping）を試行
-    2. 固定マッピングがない場合、ラベル走査方式にフォールバック
-    """
-    logger = logging.getLogger(__name__)
-
-    # 固定セルマッピングを試行
-    if "excel_cell_mapping" in config:
-        result = write_data_to_excel_fixed(filepath, data, config, dry_run=dry_run)
-        if result is not None:
-            return result
-
-    # フォールバック: ラベル走査方式
-    logger.info("  ラベル走査方式で書き込みを実行します。")
-    return write_data_to_excel_label(filepath, data, config, dry_run=dry_run)
-
-
-def _col_letter(col_num):
-    """列番号をアルファベットに変換する。"""
-    return get_column_letter(col_num)
 
 
 # ---------------------------------------------------------------------------
@@ -634,20 +370,18 @@ def generate_report(report_path, success_list, no_name_pdfs, no_match_pdfs,
 # ---------------------------------------------------------------------------
 # メイン処理
 # ---------------------------------------------------------------------------
-def process_all(config_path, pdf_dir, excel_dir, dry_run=False, log_file=None, target_form="form1"):
-    """全PDFを処理してExcelに転記する。
-
-    Args:
-        target_form: 書き込み対象フォーム。"form1"=上段（デフォルト）、"form2"=下段。
-                     コマンドライン引数 --form で指定された値が優先される。
-    """
+def process_all(config_path, pdf_dir, excel_dir, form_name="form1",
+                dry_run=False, log_file=None):
+    """全PDFを処理してExcelに転記する。"""
     setup_logging(log_file)
     logger = logging.getLogger(__name__)
 
     config = load_config(config_path)
 
-    # --form 引数でconfigのtarget_formを上書き（常にform1がデフォルト）
-    config["target_form"] = target_form
+    # フォーム名の存在チェック
+    if form_name not in config.get("fixed_cell_mapping", {}):
+        logger.error(f"フォーム「{form_name}」が config.json の fixed_cell_mapping に存在しません。")
+        sys.exit(1)
 
     mode_label = "【ドライラン】" if dry_run else ""
     now = datetime.now()
@@ -657,7 +391,7 @@ def process_all(config_path, pdf_dir, excel_dir, dry_run=False, log_file=None, t
     logger.info(f"{'='*60}")
     logger.info(f"PDF入力元:   {os.path.abspath(pdf_dir)}")
     logger.info(f"Excel出力先: {os.path.abspath(excel_dir)}")
-    logger.info(f"対象フォーム: {target_form}（{'上段' if target_form == 'form1' else '下段'}）")
+    logger.info(f"フォーム:    {form_name}")
 
     os.makedirs(pdf_dir, exist_ok=True)
     os.makedirs(excel_dir, exist_ok=True)
@@ -739,7 +473,8 @@ def process_all(config_path, pdf_dir, excel_dir, dry_run=False, log_file=None, t
 
             try:
                 written, skipped, protected = write_data_to_excel(
-                    excel_path, data, config, dry_run=dry_run
+                    excel_path, data, config,
+                    form_name=form_name, dry_run=dry_run,
                 )
             except Exception as e:
                 logger.error(f"  Excel書き込みエラー: {excel_name} - {e}")
@@ -831,19 +566,19 @@ def main():
     parser.add_argument("--config", default="config.json", help="設定ファイルパス")
     parser.add_argument("--pdf-dir", default="input_pdf", help="PDF入力ディレクトリ")
     parser.add_argument("--excel-dir", default="excel_sheets", help="Excelファイルディレクトリ")
+    parser.add_argument("--form", default="form1",
+                        help="書き込み先フォーム名 (デフォルト: form1)")
     parser.add_argument("--dry-run", action="store_true", help="ドライラン（書き込みせず確認のみ）")
     parser.add_argument("--log-file", default=None, help="ログファイルパス")
-    parser.add_argument("--form", default="form1", choices=["form1", "form2"],
-                        help="書き込み対象フォーム (デフォルト: form1=上段。form2=下段は将来用)")
     args = parser.parse_args()
 
     process_all(
         config_path=args.config,
         pdf_dir=args.pdf_dir,
         excel_dir=args.excel_dir,
+        form_name=args.form,
         dry_run=args.dry_run,
         log_file=args.log_file,
-        target_form=args.form,
     )
 
 
